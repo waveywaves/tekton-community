@@ -21,6 +21,7 @@ see-also:
   - [Use Cases](#use-cases)
   - [Requirements](#requirements)
 - [Proposal](#proposal)
+  - [Before and after](#before-and-after)
   - [Notes and Caveats](#notes-and-caveats)
 - [Design Details](#design-details)
   - [Request flow](#request-flow)
@@ -138,6 +139,40 @@ The initial design adds no Pod, Deployment, sidecar, or Service.
 Direct mode is disabled by default during alpha and selected explicitly per
 resolver. A failed direct attempt never silently falls back to CRD mode because
 that can duplicate work and bypass direct-path policy.
+
+### Before and after
+
+| | Before: CRD path | After: direct path |
+|---|---|---|
+| Coordination | `ResolutionRequest` in Kubernetes | Bounded `DirectRequester` state |
+| Resolver call | Informer-driven reconciliation | Internal HTTPS request |
+| Kubernetes operations | Create, status update, read, and delete | No `ResolutionRequest` CRUD |
+| Cache hit | Still incurs CRD operations | Returns without Kubernetes writes |
+| Diagnostics | `ResolutionRequest` status | Run status, Events, logs, metrics, and traces |
+
+**Before: `ResolutionRequest` coordination**
+
+```mermaid
+sequenceDiagram
+    participant C as Pipelines controller
+    participant K as Kubernetes API / etcd
+    participant R as Resolver controller
+    participant S as Remote source
+
+    C->>K: Create ResolutionRequest
+    K-->>R: Informer event
+    R->>R: Validate and check cache
+    opt cache miss
+      R->>S: Fetch
+      S-->>R: Resource
+    end
+    R->>K: Update ResolutionRequest status
+    K-->>C: Informer event / requeue
+    C->>K: Read result
+    K->>K: Garbage collect ResolutionRequest
+```
+
+**After: direct coordination**
 
 ```mermaid
 sequenceDiagram
