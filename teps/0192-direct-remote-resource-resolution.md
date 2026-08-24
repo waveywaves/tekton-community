@@ -64,8 +64,9 @@ existing resolver service. A bounded asynchronous requester calls a versioned
 internal HTTPS/JSON endpoint without changing `taskRef`, `pipelineRef`,
 `stepRef`, `TaskRun`, or `PipelineRun` APIs.
 
-The CRD path remains the default during migration. This TEP neither deprecates
-`ResolutionRequest` nor requires a new Pod, Service, database, or broker.
+The CRD path remains the default and is the only path for custom resolvers in
+alpha. This TEP neither deprecates `ResolutionRequest` nor requires a new Pod,
+Service, database, broker, or public resolver-registration API.
 
 ## Motivation
 
@@ -88,7 +89,7 @@ boundary, and Runs already requeue on `ErrRequestInProgress`.
   Events, and trusted-resource verification.
 - Keep remote I/O, memory, concurrency, and response sizes bounded.
 - Preserve namespace and credential isolation.
-- Support explicit per-resolver migration and rollback.
+- Support explicit per-built-in-resolver migration and rollback.
 - Require measured API and etcd improvement before graduation.
 
 ### Non-Goals
@@ -98,13 +99,14 @@ boundary, and Runs already requeue on `ErrRequestInProgress`.
 - Deprecating `ResolutionRequest`.
 - Requiring a database, broker, new resolver workload, or exactly-once fetches.
 - Adding a controller-local content cache.
+- Defining registration or discovery for external direct resolver services.
 
 ### Use Cases
 
 - A high-volume cluster enables direct mode for built-in resolvers without
   changing Pipeline definitions.
-- Repeated immutable references return from the resolver cache without
-  Kubernetes object writes.
+- After tenant-safe caching is available, repeated immutable references return
+  from the resolver cache without Kubernetes object writes.
 - Built-in resolvers use direct mode while custom resolvers remain on the CRD
   path.
 
@@ -118,7 +120,8 @@ boundary, and Runs already requeue on `ErrRequestInProgress`.
 - Direct and CRD modes MUST coexist without automatic fallback for an attempt.
 - HTTPS and authenticated callers MUST be required.
 - Secret values MUST NOT enter protocol payloads, logs, or metric labels.
-- The resolver cache MUST be tenant-safe before direct mode can be enabled.
+- Direct requests MUST bypass the shared resolver cache unless its key is
+  tenant-safe.
 - A maximum-resolution deadline MUST remain durable across controller restarts,
   or different alpha semantics MUST be explicitly accepted before enablement.
 - Resolvers MUST tolerate duplicate requests.
@@ -147,7 +150,7 @@ that can duplicate work and bypass direct-path policy.
 | Coordination | `ResolutionRequest` in Kubernetes | Bounded `DirectRequester` state |
 | Resolver call | Informer-driven reconciliation | Internal HTTPS request |
 | Kubernetes operations | Create, status update, read, and delete | No `ResolutionRequest` CRUD |
-| Cache hit | Still incurs CRD operations | Returns without Kubernetes writes |
+| Cache hit | Still incurs CRD operations | No CRD writes after tenant-safe caching is enabled |
 | Diagnostics | `ResolutionRequest` status | Run status, Events, logs, metrics, and traces |
 
 **Before: `ResolutionRequest` coordination**
@@ -185,7 +188,7 @@ sequenceDiagram
     D-->>C: ErrRequestInProgress
     C->>C: Requeue Run
     D->>R: HTTPS resolve
-    R->>R: Validate and check cache
+    R->>R: Validate; check cache if safely enabled
     opt cache miss
       R->>S: Fetch
       S-->>R: Resource
@@ -199,8 +202,19 @@ sequenceDiagram
 
 The direct path has no durable request object. Controller restart may repeat a
 fetch, but resolved resources remain persisted through existing Run status
-paths. Operators use Run conditions, Events, logs, metrics, and traces instead
-of inspecting `ResolutionRequest` objects.
+paths.
+
+| CRD behavior | Direct-path replacement |
+|---|---|
+| Namespace in object metadata | Namespace asserted by the authenticated Pipelines controller and injected into resolver context |
+| Creation timestamp | Durable per-reference deadline; unresolved below |
+| Owner reference and garbage collection | Owner-scoped bounded entry removed after consumption, TTL, or deadline |
+| Request status and conditions | Existing Run conditions and Events plus resolver metrics and traces |
+| Kubernetes audit record | Authenticated structured request logs and traces; no API-object audit event |
+
+At `proposed` status, endpoint shapes and tuning values illustrate the design.
+The behavior and security requirements are normative; implementation details
+may change before the TEP becomes `implementable`.
 
 ## Design Details
 
@@ -236,7 +250,8 @@ process shutdown.
 
 ### Protocol
 
-The internal endpoint is:
+The alpha protocol is internal to the Pipelines controller and the built-in
+resolver process:
 
 ```text
 POST /v1alpha1/resolvers/{resolver}/resolve
@@ -245,6 +260,11 @@ POST /v1alpha1/resolvers/{resolver}/resolve
 Requests and responses use HTTPS/JSON with strict size limits. Parameters retain
 their Tekton types and array order. `X-Request-ID` is a random correlation value,
 not a cache or idempotency key.
+
+Changes within `v1alpha1` are additive and optional; peers ignore unknown JSON
+fields. Current and previous Tekton release components MUST interoperate during
+a rolling upgrade. Breaking changes use a new path and are served alongside the
+old path during migration. Version-skew conformance tests gate release.
 
 Request:
 
@@ -283,7 +303,7 @@ HTTP status determines retry behavior; the body cannot override it.
 | Status | Classification |
 |---|---|
 | Unlisted `4xx`, including `400` and `404` | Terminal |
-| `401` or `403` | Refresh token once, then terminal |
+| `401` or `403` | Re-read the projected token once, then terminal |
 | `408`, `425`, or `429` | Transient |
 | `413` | Terminal |
 | `5xx` | Transient |
@@ -294,62 +314,68 @@ overall resolution deadline.
 
 ### Dispatch configuration
 
-An operator-owned ConfigMap in `tekton-pipelines` selects mode and endpoint per
-resolver:
+A flat, operator-owned ConfigMap in `tekton-pipelines` selects mode for known
+built-in resolvers:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: resolver-dispatch
+  name: config-resolver-dispatch
   namespace: tekton-pipelines
 data:
-  config.yaml: |
-    apiVersion: resolution.tekton.dev/v1alpha1
-    defaultMode: crd
-    endpoints:
-      builtins:
-        url: https://tekton-pipelines-remote-resolvers.tekton-pipelines-resolvers.svc:8443
-        serverName: tekton-pipelines-remote-resolvers.tekton-pipelines-resolvers.svc
-        caBundleSecretRef:
-          name: resolver-client-ca
-          key: ca.crt
-        audience: tekton-resolver-builtins
-    resolvers:
-      git:
-        mode: direct
-        endpoint: builtins
+  git: direct
+  bundles: direct
 ```
 
-Updates are validated and applied atomically. Invalid updates retain the last
-known good configuration. Every valid update creates a generation; old results
-cannot satisfy requests from the new generation. Rollback explicitly changes a
-resolver to `crd`.
+Keys use the existing resolver type values such as `git`, `bundles`, `hub`,
+`cluster`, and `http`. An absent ConfigMap or resolver key means `crd`. Values
+are `crd` or `direct`. Unknown built-in resolver names and unknown values reject
+the whole update. Invalid updates retain the last known good snapshot; without one, all
+resolvers remain on CRD mode and a configuration error is reported.
 
-A custom resolver may expose the protocol from its own Service or remain on the
-CRD path.
+The validated ConfigMap content hash is the dispatch generation, giving all
+controller replicas the same stable value. Results from an older generation
+cannot satisfy new submissions. TaskRun and PipelineRun controllers consume the
+same typed snapshot. A direct attempt never falls back automatically.
+
+Endpoint and trust settings are installation wiring, not live dispatch policy.
+The controller Deployment supplies the built-in Service address, server name,
+mounted CA path, and projected ServiceAccount token. The resolver Deployment
+supplies its serving certificate, token audience, and allowed controller
+identity. Operators may override this wiring in manifests, but the dispatch
+ConfigMap cannot redirect requests to an arbitrary URL.
+
+Custom resolvers remain on CRD mode in alpha. A future external direct-resolver
+contract requires separate API and security review.
 
 ### Caching and tenant isolation
 
 The current cache key omits namespace and credential/configuration scope and
-sorts array values. Direct mode MUST remain disabled until the shared cache:
+sorts array values. This is independent of the transport change. Direct requests
+bypass the shared cache by default until the cache implementation:
 
 - includes namespace, resolver configuration generation, and a stable
   resolver-provided credential scope;
 - preserves parameter types and array order; and
 - invalidates affected entries after configuration or credential changes.
 
-If a resolver cannot provide a safe credential scope, that request is not
-cached. Resolver implementations continue loading credentials server-side;
-Secret contents never cross the protocol.
+Tenant-safe caching can then be enabled per built-in resolver. If a resolver
+cannot provide a safe credential scope, its direct requests remain uncached.
+Resolver implementations continue loading credentials server-side; Secret
+contents never cross the protocol.
 
 ### Authentication
 
-The controller validates each endpoint's certificate with its configured CA and
-server name. It obtains a short-lived ServiceAccount token for the endpoint's
-audience. The resolver requires that audience in TokenReview and permits only
-configured controller ServiceAccounts. CA and token rotation must not require a
-restart.
+The controller validates the built-in endpoint certificate with its mounted CA
+and expected server name. A projected ServiceAccount token uses a fixed resolver
+audience and is rotated by the kubelet. The resolver requires that audience in
+TokenReview and accepts only the exact Pipelines controller ServiceAccount.
+Only that identity may assert the Run namespace carried by the request. The
+resolver caches a successful TokenReview no longer than the token's expiry.
+
+The installation adds only the RBAC required to create TokenReviews. Mounted CA
+and serving-certificate updates are reloaded without restarting either process.
 
 ### Reliability and deadlines
 
@@ -384,8 +410,9 @@ fields. Existing Run conditions and Events retain user-visible state.
 
 ### Reusability
 
-The design reuses `Requester`, resolver implementations, validation, caching,
-singleflight, error reasons, Run requeue behavior, and resolved-resource types.
+The design reuses `Requester`, resolver implementations, validation, error
+reasons, Run requeue behavior, and resolved-resource types. It can reuse caching
+and singleflight after tenant-safe keys are available.
 
 ### Simplicity
 
@@ -395,9 +422,9 @@ API or YAML change.
 
 ### Flexibility
 
-Built-in and custom resolvers can migrate independently. Tekton depends only on
-the versioned protocol, not a database, broker, implementation language, or new
-storage layer.
+Built-in resolvers migrate independently while custom resolvers retain the CRD
+contract. Alpha does not establish a third-party network API. Tekton adds no
+database, broker, or storage layer.
 
 ### Conformance and user experience
 
@@ -421,9 +448,11 @@ outages, and restarts. Alpha graduation requires:
 | Risk | Mitigation |
 |---|---|
 | Controller or resolver overload | Bound queues, workers, payloads, entries, TTLs, and retries |
-| Repeated fetch after restart | Require idempotent resolution; reuse cache and singleflight |
-| Cross-tenant cache leakage | Block enablement until tenant-safe keys exist; disable unsafe caching |
-| Endpoint or token impersonation | Validate TLS, audience-bound tokens, and caller allowlists |
+| Repeated fetch after restart | Require idempotent resolution and bounded retries; use cache only when tenant-safe |
+| Cross-tenant cache leakage | Bypass cache until tenant-safe keys exist; disable unsafe caching |
+| Endpoint redirection or token impersonation | Keep endpoint wiring out of dispatch config; validate TLS, audience, and exact caller identity |
+| Protocol version skew | Require additive changes and current/previous release conformance tests |
+| TokenReview API load | Cache successful reviews no longer than token expiry |
 | Retry storm | Backoff with jitter, honor bounded `Retry-After`, export saturation |
 | CRD and direct behavior drift | Shared resolver code and conformance tests |
 | Reduced inspectability | Preserve Run status and Events; add metrics, traces, and logs |
@@ -445,6 +474,7 @@ outages, and restarts. Alpha graduation requires:
 | Block reconciliation workers on direct calls | Resolver slowness can starve unrelated Runs |
 | Embed resolvers in the Pipelines controller | Couples dependencies, RBAC, credentials, failures, and scaling |
 | Use an aggregated API server or database | Moves churn and adds an operational dependency |
+| Register external endpoints in nested ConfigMap YAML | Lacks schema, status, and safe Secret handling; custom direct resolution needs separate review and may warrant a typed low-cardinality CRD |
 | Reintroduce `ClusterTask` | Covers only in-cluster Tasks, not git, bundle, hub, or HTTP |
 | Do nothing | Acceptable if Phase 0 shows resolution writes are not material |
 
@@ -459,9 +489,11 @@ outages, and restarts. Alpha graduation requires:
 
 ### Phase 1: alpha implementation
 
-- Fix tenant-safe cache keys and durable deadline semantics first.
-- Add protocol types, handler, TLS/authentication, and conformance tests.
-- Add bounded `DirectRequester` and atomic per-resolver dispatch configuration.
+- Resolve durable deadline semantics before direct mode is enabled.
+- Add the built-in protocol handler, projected-token authentication, TLS, and
+  current/previous release conformance tests.
+- Add bounded `DirectRequester` and typed flat dispatch configuration.
+- Bypass the shared cache until tenant-safe cache-key work lands separately.
 - Enable built-in resolvers only in tests, then as an opt-in alpha.
 
 ### Phase 2: evaluate graduation
@@ -473,10 +505,10 @@ outages, and restarts. Alpha graduation requires:
 
 ### Test Plan
 
-- Unit-test state transitions, limits, cache keys, error mapping, backoff, and
-  authentication decisions.
-- Integration-test every built-in resolver, TLS/token rotation, cache behavior,
-  replicas, restarts, and mode changes.
+- Unit-test state transitions, limits, dispatch parsing and generations, error
+  mapping, backoff, cache bypass, and authentication decisions.
+- Integration-test every built-in resolver, current/previous protocol skew,
+  TLS/token rotation, cache behavior, replicas, restarts, and mode changes.
 - End-to-end test Task, Pipeline, child Pipeline, and StepAction resolution,
   trusted resources, mixed modes, and unchanged Run status.
 - Load-test hits, misses, outages, saturation, memory bounds, and API/etcd writes.
@@ -484,15 +516,17 @@ outages, and restarts. Alpha graduation requires:
 ### Infrastructure Needed
 
 The existing resolver Deployment, Service, and container gain port `8443`, an
-HTTPS handler, serving certificate, readiness, graceful shutdown, and HA/PDB
-guidance. No new project or mandatory external service is required.
+HTTPS handler, serving certificate, TokenReview RBAC, readiness, graceful
+shutdown, and HA/PDB guidance. The controller Deployment gains a mounted CA and
+projected audience-bound token. No new project or mandatory external service is
+required.
 
 ### Upgrade and Migration Strategy
 
-Direct mode ships disabled. Operators enable and roll it back per resolver. The
-existing process serves CRD and direct requests concurrently; custom resolvers
-remain on CRD mode until they implement the protocol. No user YAML migration is
-required.
+Direct mode ships disabled. Operators enable and roll it back per built-in
+resolver. The existing process serves CRD and direct requests concurrently.
+Custom resolvers remain on CRD mode; this TEP does not define their network
+registration. No user YAML migration is required.
 
 ### Implementation Pull Requests
 
@@ -505,7 +539,8 @@ To be added as implementation pull requests merge.
 2. What worker, queue, attempt-timeout, result-TTL, and payload defaults are
    safe?
 3. Is timed Run requeue sufficient, or should completion enqueue the Run?
-4. Which cache scope can each built-in resolver prove?
+4. Which cache scope can each built-in resolver prove, and when should caching
+   be enabled for direct requests?
 5. What measured threshold justifies implementation and graduation?
 
 ## References
