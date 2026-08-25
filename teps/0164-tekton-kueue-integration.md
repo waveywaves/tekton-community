@@ -2,7 +2,7 @@
 status: proposed
 title: Tekton Kueue Integration
 creation-date: '2026-01-28'
-last-updated: '2026-01-28'
+last-updated: '2026-08-25'
 authors:
 - '@gbenhaim'
 collaborators: []
@@ -41,13 +41,13 @@ see-also:
   - [Test Plan](#test-plan)
   - [Infrastructure Needed](#infrastructure-needed)
   - [Upgrade and Migration Strategy](#upgrade-and-migration-strategy)
-  - [Implementation Pull Requests](#implementation-pull-requests)
+  - [Implementation and Releases](#implementation-and-releases)
 - [References](#references)
 <!-- /toc -->
 
 ## Summary
 
-This TEP proposes the adoption of [tekton-kueue](https://github.com/konflux-ci/tekton-kueue) into the Tekton community. tekton-kueue is a controller that integrates Tekton with [Kueue](https://kueue.sigs.k8s.io/), enabling Kueue to manage the scheduling and queueing of Tekton PipelineRuns.
+This TEP proposes the adoption of [tekton-kueue](https://github.com/tektoncd/tekton-kueue) into the Tekton community. tekton-kueue is a controller that integrates Tekton with [Kueue](https://kueue.sigs.k8s.io/), enabling Kueue to manage the scheduling and queueing of Tekton PipelineRuns.
 
 This project directly addresses the requirements for PipelineRuns outlined in [TEP-0132: Queueing Concurrent Runs](./0132-queueing-concurrent-runs.md) by providing:
 
@@ -111,7 +111,7 @@ The following use cases are addressed by tekton-kueue, directly mapping to those
 1. **Kubernetes-native**: The solution must work with standard Kubernetes primitives and be deployable via standard methods (kubectl, kustomize)
 2. **Non-invasive**: Must not require modifications to existing PipelineRun definitions or the Tekton Pipelines controller
 3. **Observable**: Must expose metrics for monitoring queueing behavior and performance
-4. **Configurable**: Must support both cluster-wide defaults and namespace-specific overrides
+4. **Configurable**: Must support cluster-wide defaults and namespace-aware behavior through webhook selectors and CEL expressions
 5. **Extensible**: Must allow custom logic through CEL expressions for dynamic configuration
 
 ## Proposal
@@ -148,7 +148,7 @@ The core workflow is:
    - End-to-end tests validating integration with Kueue
    - Active maintenance and issue tracking
 
-4. **Version Compatibility**: Currently supports Kueue v0.14.x and Tekton Pipelines v1.6.x
+4. **Version Compatibility**: Currently tested with Kueue v0.16.x and Tekton Pipelines v1.15.x
 
 ## Design Details
 
@@ -300,7 +300,7 @@ When enabled, the webhook sets `spec.managedBy` to `kueue.x-k8s.io/multikueue`, 
 ### Flexibility
 
 - **CEL expressions**: Powerful customization without requiring code changes
-- **Configurable at multiple levels**: Global defaults, namespace overrides, per-PipelineRun annotations
+- **Configurable at multiple levels**: Global defaults, namespace-aware CEL expressions, and per-PipelineRun annotations
 - **Extensible resource model**: Custom resource types can be defined for any use case
 - **MultiKueue support**: Scales to multi-cluster scenarios
 
@@ -400,7 +400,7 @@ Post-adoption, we will:
 
 1. **Repository**: `tektoncd/tekton-kueue` (transferred from `konflux-ci/tekton-kueue`)
 2. **CI/CD**: Prow jobs in tektoncd/plumbing for testing and releases
-3. **Container Registry**: Images published to gcr.io/tekton-releases
+3. **Container Registry**: Release automation targets `ghcr.io/tektoncd/tekton-kueue`
 4. **Documentation**: Section on tekton.dev for tekton-kueue
 
 ### Upgrade and Migration Strategy
@@ -411,12 +411,13 @@ For existing tekton-kueue users:
 2. **No API changes**: Configuration format remains compatible
 3. **Gradual rollout**: Can run alongside existing deployment during migration
 
-### Implementation Pull Requests
+### Implementation and Releases
 
-The implementation already exists at:
-- https://github.com/konflux-ci/tekton-kueue
-
-Post-adoption PRs will be tracked in the new tektoncd repository.
+- [tektoncd/tekton-kueue](https://github.com/tektoncd/tekton-kueue)
+- [tekton-kueue releases](https://github.com/tektoncd/tekton-kueue/releases)
+- [v0.4.0 installation manifest](https://github.com/tektoncd/tekton-kueue/releases/download/v0.4.0/release-v0.4.0.yaml)
+- [Tekton release automation](https://github.com/tektoncd/tekton-kueue/pull/531)
+- [Tekton CI and release infrastructure](https://github.com/tektoncd/plumbing/pull/3579)
 
 ## References
 
@@ -427,7 +428,7 @@ Post-adoption PRs will be tracked in the new tektoncd repository.
 
 **External Documentation:**
 - [Kueue Documentation](https://kueue.sigs.k8s.io/docs/)
-- [tekton-kueue Repository](https://github.com/konflux-ci/tekton-kueue)
+- [tekton-kueue Repository](https://github.com/tektoncd/tekton-kueue)
 - [Kueue External Frameworks](https://kueue.sigs.k8s.io/docs/concepts/workload/)
 
 **Feature Requests (from TEP-0132):**
