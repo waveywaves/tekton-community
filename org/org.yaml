@@ -107,12 +107,12 @@ orgs:
     - jromero
     - jsminem
     - jtudelag
+    - kaushalnavneet
     - kgcarr
     - khalkie
     - khrm
     - kimholmes
     - kimsterv
-    - lcarva
     - lbernick
     - lukehinds
     - maneeshmehra
@@ -205,7 +205,22 @@ orgs:
     - zakisk
     - gbenhaim
     - mathur07
+    - celeztyne
     - dorzel
+    - eisraeli
+    - enkeefe00
+    - filariow
+    - gcpsoares
+    - glevi-rh
+    - hugares
+    - ilaydamari
+    - manish-jangra
+    - meyrevived
+    - mshaposhnik
+    - oswcab
+    - sadlerap
+    - vsokolen-redhat
+    - wbrefvem
     # alumni:
     # sbwsg
     teams:
@@ -227,6 +242,10 @@ orgs:
         - dibyom
         - AlanGreene
         - abayer
+        - khrm
+        - waveywaves
+        - theakshaypant
+        - infernus01
         privacy: closed
       catalog.maintainers:
         description: the catalog maintainers
@@ -251,7 +270,6 @@ orgs:
       chains.admins:
         description: the chains admins
         members:
-          - lcarva
           - priyawadhwa
           - PuneetPunamiya
           - wlynch
@@ -262,8 +280,10 @@ orgs:
         description: the chains maintainers
         members:
         - anithapriyanatarajan
+        - ab-ghosh
+        - enarha
+        - infernus01
         - jkhelil
-        - lcarva
         - PuneetPunamiya
         - vdemeester
         - wlynch
@@ -319,6 +339,7 @@ orgs:
         - AlanGreene
         members:
         - briangleeson
+        - kaushalnavneet
         - LyndseyBu
         # alumni:
         # - skaegi
@@ -335,25 +356,13 @@ orgs:
         privacy: closed
         repos:
           homebrew-tools: maintain
-      hub.maintainers:
-        description: the hub maintainers
-        maintainers:
-        - vdemeester
-        members:
-        - sthaha
-        - pratap0007
-        - PuneetPunamiya
-        - SM43
-        - vinamra28
-        privacy: closed
-        repos:
-          hub: maintain
       operator.maintainers:
         description: the operator maintainers
         maintainers:
         - vdemeester
         members:
         - anithapriyanatarajan
+        - divyansh42
         - jkhelil
         - mbpavan
         - pramodbindal
@@ -419,6 +428,7 @@ orgs:
         maintainers:
         - vdemeester
         members:
+        - divyansh42
         - khrm
         - enarha
         # alumni:
@@ -439,6 +449,7 @@ orgs:
         maintainers:
         - vdemeester
         members:
+        - divyansh42
         - enarha
         - khrm
         # alumni:
@@ -454,6 +465,56 @@ orgs:
         privacy: closed
         repos:
           results: read
+      tekton-kueue.maintainers:
+        description: the tekton-kueue maintainers
+        maintainers:
+        - gbenhaim
+        - pramodbindal
+        - vdemeester
+        members:
+        - celeztyne
+        - eisraeli
+        - enkeefe00
+        - filariow
+        - gcpsoares
+        - glevi-rh
+        - hugares
+        - ilaydamari
+        - manish-jangra
+        - meyrevived
+        - mshaposhnik
+        - oswcab
+        - sadlerap
+        - vsokolen-redhat
+        - wbrefvem
+        privacy: closed
+        repos:
+          tekton-kueue: maintain
+      tekton-kueue.collaborators:
+        description: The tekton-kueue collaborators
+        maintainers:
+        - gbenhaim
+        - pramodbindal
+        - vdemeester
+        members:
+        - celeztyne
+        - eisraeli
+        - enkeefe00
+        - filariow
+        - gcpsoares
+        - glevi-rh
+        - hugares
+        - ilaydamari
+        - manish-jangra
+        - meyrevived
+        - mshaposhnik
+        - oswcab
+        - sadlerap
+        - vsokolen-redhat
+        - wbrefvem
+        privacy: closed
+        repos:
+          tekton-kueue: read
       triggers.maintainers:
         description: the triggers maintainers
         maintainers:
@@ -629,10 +690,10 @@ orgs:
         - vincent-pli
         - mpeters
         - afrittoli
+        - anithapriyanatarajan
         - vinamra28
         - pierretasci
         - priyawadhwa
-        - lcarva
         - adambkaplan
         - chitrangpatel
         - avinal
@@ -651,22 +712,24 @@ orgs:
         - afrittoli
         - ImJasonH
         members:
-        - steveodonovan
-        - Megan-Wright
-        - carlos-logro
         - AlanGreene
         - briangleeson
-        - ncskier
-        - CarolynMabbott
-        - dibbles
-        - mnuttall
-        - akihikokuroda
-        - a-roberts
-        - vdemeester
-        - skaegi
-        - jessm12
-        - ziheng
+        - kaushalnavneet
         - LyndseyBu
+        - skaegi
+        - vdemeester
+        # alumni:
+        # - a-roberts
+        # - akihikokuroda
+        # - carlos-logro
+        # - CarolynMabbott
+        # - dibbles
+        # - jessm12
+        # - Megan-Wright
+        # - mnuttall
+        # - ncskier
+        # - steveodonovan
+        # - ziheng
         privacy: closed
         repos:
           dashboard: read
@@ -686,7 +749,6 @@ orgs:
         - savitaashture
         - SM43
         - afrittoli
-        - lcarva
         - vinamra28
         - JeromeJu
         - chitrangpatel
@@ -817,6 +879,8 @@ orgs:
         - savitaashture
         - piyush-garg
         - concaf
+        - divyansh42
+        - infernus01
         - jkandasa
         - jkhelil
         - khrm
@@ -851,23 +915,6 @@ orgs:
         privacy: closed
         repos:
           homebrew-tools: read
-      hub.collaborators:
-        description: The hub collaborators
-        maintainers:
-        - abayer
-        - afrittoli
-        - ImJasonH
-        - vdemeester
-        members:
-        - PuneetPunamiya
-        - pratap0007
-        - sthaha
-        - SM43
-        - piyush-garg
-        - vinamra28
-        privacy: closed
-        repos:
-          hub: read
       catlin.collaborators:
         description: The catlin collaborators
         maintainers:
@@ -884,14 +931,17 @@ orgs:
         members:
         - anithapriyanatarajan
         - abayer
+        - ab-ghosh
         - afrittoli
         - chuangw6
         - chitrangpatel
         - dlorenc
+        - enarha
         - ImJasonH
+        - infernus01
         - jkhelil
-        - lcarva
         - mattmoor
+        - ngelman1
         - pritidesai
         - priyawadhwa
         - PuneetPunamiya

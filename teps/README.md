@@ -78,7 +78,7 @@ This is the complete list of Tekton TEPs:
 |[TEP-0082](0082-workspace-hinting.md) | Workspace Hinting | proposed | 2021-10-26 |
 |[TEP-0083](0083-polling-runs-in-tekton.md) | Polling runs in Tekton | proposed | 2021-09-13 |
 |[TEP-0084](0084-endtoend-provenance-collection.md) | end-to-end provenance collection | implemented | 2023-03-21 |
-|[TEP-0085](0085-per-namespace-controller-configuration.md) | Per-Namespace Controller Configuration | proposed | 2021-10-14 |
+|[TEP-0085](0085-per-namespace-controller-configuration.md) | Per-Namespace Controller Configuration | proposed | 2026-05-27 |
 |[TEP-0086](0086-changing-the-way-result-parameters-are-stored.md) | Changing the way result parameters are stored | proposed | 2022-06-09 |
 |[TEP-0088](0088-result-summaries.md) | Tekton Results - Record Summaries | proposed | 2021-10-01 |
 |[TEP-0089](0089-nonfalsifiable-provenance-support.md) | Non-falsifiable provenance support | implementable | 2022-01-18 |
@@ -126,7 +126,7 @@ This is the complete list of Tekton TEPs:
 |[TEP-0134](0134-concise-pipelines.md) | Concise Pipelines | proposed | 2023-04-28 |
 |[TEP-0135](0135-coscheduling-pipelinerun-pods.md) | Coscheduling PipelineRun pods | implemented | 2023-07-27 |
 |[TEP-0136](0136-capture-traces-for-task-pod-events.md) | Capture traces for task pod events | implementable | 2023-07-23 |
-|[TEP-0137](0137-cloudevents-controller.md) | CloudEvents controller | implementable | 2023-07-31 |
+|[TEP-0137](0137-cloudevents-controller.md) | CloudEvents controller | implementable | 2026-03-26 |
 |[TEP-0138](0138-decouple-api-and-feature-versioning.md) | Decouple API and feature versioning | implemented | 2024-02-20 |
 |[TEP-0139](0139-trusted-artifacts.md) | Trusted Artifacts | proposed | 2023-07-27 |
 |[TEP-0140](0140-producing-results-in-matrix.md) | Producing Results in Matrix | implemented | 2023-10-24 |
@@ -146,8 +146,10 @@ This is the complete list of Tekton TEPs:
 |[TEP-0154](0154-concise-remote-resolver-syntax.md) | Concise Remote Resolver Syntax | implementable | 2024-03-21 |
 |[TEP-0155](0155-store-pipeline-events-in-db.md) | Store Pipeline Events in Tekton Results | proposed | 2024-04-19 |
 |[TEP-0156](0156-whenexpressions-in-step.md) | WhenExpressions in Steps | implemented | 2024-07-22 |
+|[TEP-0158](0158-pipeline-fail-fast.md) | Pipeline fail-fast | implementable | 2026-03-23 |
 |[TEP-0160](0160-enhance-results-cli.md) | Enhance Tekton Results CLI | proposed | 2025-03-13 |
 |[TEP-0161](0161-resolver-caching.md) | Resolver Caching for Task and Pipeline Resolution | proposed | 2024-06-15 |
 |[TEP-0162](0162-event-based-pruning-of-tekton-resources.md) | event based pruning of tekton resources | proposed | 2025-06-18 |
 |[TEP-0163](0163-profilebased-dynamic-compute-resources-for-steps.md) | Profile-Based Dynamic Compute Resources for Steps | proposed | 2025-09-01 |
+|[TEP-0164](0164-tekton-kueue-integration.md) | Tekton Kueue Integration | proposed | 2026-01-28 |
 |[TEP-0170](0170-agent-native-workflows.md) | AgentTask and Pluggable Agent Execution | proposed | 2026-08-30 |
