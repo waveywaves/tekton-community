@@ -2,7 +2,7 @@
 status: proposed
 title: AgentTask and Pluggable Agent Execution
 creation-date: '2026-03-20'
-last-updated: '2026-08-30'
+last-updated: '2026-08-31'
 authors:
 - '@waveywaves'
 - '@anithapriyanatarajan'
@@ -31,15 +31,15 @@ authors:
   - [Architecture](#architecture)
   - [AgentTask](#agenttask)
   - [Using AgentTask in a Pipeline](#using-agenttask-in-a-pipeline)
-  - [Agent Executor Framework](#agent-executor-framework)
+  - [AgentTask Adapter Framework](#agenttask-adapter-framework)
     - [Framework Responsibilities](#framework-responsibilities)
-    - [Executor Responsibilities](#executor-responsibilities)
-    - [Bring Your Own Executor](#bring-your-own-executor)
-  - [Worked Adapter Examples](#worked-adapter-examples)
+    - [AgentTask Adapter Responsibilities](#agenttask-adapter-responsibilities)
+    - [Bring Your Own AgentTask Adapter](#bring-your-own-agenttask-adapter)
+  - [Worked AgentTask Adapter Examples](#worked-agenttask-adapter-examples)
     - [Fullsend](#fullsend)
     - [OpenShift Lightspeed Agentic Operator](#openshift-lightspeed-agentic-operator)
     - [OpenHands](#openhands)
-    - [Reference TaskRun Executor](#reference-taskrun-executor)
+    - [Reference TaskRun AgentTask Adapter](#reference-taskrun-agenttask-adapter)
   - [Relationship to Remote Resolution](#relationship-to-remote-resolution)
   - [Integration with Tekton Projects](#integration-with-tekton-projects)
     - [Pipelines](#pipelines)
@@ -50,8 +50,8 @@ authors:
   - [Notes and Caveats](#notes-and-caveats)
 - [Design Details](#design-details)
   - [Preliminary AgentTask API](#preliminary-agenttask-api)
-  - [Executor Selection and Claiming](#executor-selection-and-claiming)
-  - [Executor Interface](#executor-interface)
+  - [AgentTask Adapter Selection and Claiming](#agenttask-adapter-selection-and-claiming)
+  - [AgentTask Adapter Interface](#agenttask-adapter-interface)
   - [Execution Lifecycle](#execution-lifecycle)
     - [Acknowledgement](#acknowledgement)
     - [Idempotency and Recovery](#idempotency-and-recovery)
@@ -79,7 +79,7 @@ authors:
   - [Use TaskRun spec.managedBy](#use-taskrun-specmanagedby)
   - [Use CustomRun Controllers Without a Framework](#use-customrun-controllers-without-a-framework)
   - [Introduce AgentRun](#introduce-agentrun)
-  - [Introduce AgentExecutorClass](#introduce-agentexecutorclass)
+  - [Introduce AgentTaskAdapterClass](#introduce-agenttaskadapterclass)
   - [Standardize a Generic Agent Container Protocol](#standardize-a-generic-agent-container-protocol)
   - [Standardize an Opaque Implementation Reference](#standardize-an-opaque-implementation-reference)
   - [Use the Resolver Interface for Execution](#use-the-resolver-interface-for-execution)
@@ -112,21 +112,21 @@ This TEP proposes:
 
 1. A reusable, namespaced `AgentTask` definition that declares the parameters,
    workspaces, and results visible to a Pipeline and explicitly selects an
-   agent executor.
+   AgentTask Adapter.
 2. The existing `CustomRun` as the durable record for every `AgentTask`
    execution. This TEP does not introduce `AgentRun`.
-3. An Agent Executor Framework, modeled on the organizational patterns of
+3. An AgentTask Adapter Framework, modeled on the organizational patterns of
    Tekton's remote resolver framework, that provides the common controller
-   lifecycle and a conformance contract for independently installed
-   executors.
-4. Executor implementations that preserve an agent platform's native runtime
-   rather than reproducing it inside Tekton.
+   lifecycle and a conformance contract for independently installed adapters.
+4. AgentTask Adapters that preserve an agent platform's native runtime rather
+   than reproducing it inside Tekton.
 
-Tekton Pipelines remains the DAG orchestrator. An executor may create a
-`TaskRun` or Kubernetes workload, create and observe a platform-native custom
-resource, or call a remote API. Fullsend, the OpenShift Lightspeed Agentic
-Operator, and OpenHands are worked examples of those three integration
-shapes.
+Tekton Pipelines remains the DAG orchestrator. An AgentTask Adapter is an
+active `CustomRun` controller: it creates or calls a platform-native execution,
+observes it, and maps its lifecycle back to Tekton. It may create a `TaskRun`
+or Kubernetes workload, create and observe a platform-native custom resource,
+or call a remote API. Fullsend, the OpenShift Lightspeed Agentic Operator, and
+OpenHands are worked examples of those three integration shapes.
 
 The proposal does not standardize prompts, models, tools, memory, agent loops,
 approvals, sandboxes, or model-provider credentials. It standardizes only the
@@ -170,7 +170,7 @@ than a Tekton-facing contract.
    reusable across invocations.
 2. Use `CustomRun` as the single execution record for `AgentTask` in a
    Pipeline or as a standalone Custom Task invocation.
-3. Let users bring an existing agent implementation by installing an executor
+3. Let users bring an existing agent implementation by installing an adapter
    controller or bridge.
 4. Provide common acknowledgement, idempotency, recovery, status,
    cancellation, timeout, cleanup, and result semantics.
@@ -179,10 +179,10 @@ than a Tekton-facing contract.
 6. Reuse Tekton params, workspaces, service accounts, Pipeline scheduling,
    `when` expressions, retries, timeouts, Triggers, Results, and Chains where
    their current contracts permit.
-7. Make executor installation and authoring comparable to resolver
+7. Make adapter installation and authoring comparable to resolver
    installation and authoring: explicit selection, independent deployment,
    narrow RBAC, a small interface, a template, and conformance tests.
-8. Validate the design against a batch executor, a Kubernetes-native
+8. Validate the design against a batch container, a Kubernetes-native
    controller, and a remote service.
 
 ### Non-Goals
@@ -200,7 +200,7 @@ than a Tekton-facing contract.
 7. Requiring kagent, Fullsend, OpenShift Lightspeed, OpenHands, or any other
    agent platform.
 8. Making arbitrary platform-native configuration portable. Such
-   configuration remains behind the executor boundary.
+   configuration remains behind the adapter boundary.
 9. Guaranteeing that an agent's semantic answer is correct. Conformance covers
    execution behavior, not model quality.
 
@@ -215,7 +215,7 @@ workflow and execution infrastructure without rewriting those Fullsend
 components.
 
 A Tekton Trigger creates a `PipelineRun`. Ordinary Tasks prepare the source and
-report back to GitHub. An `AgentTask` selects the Fullsend executor, which runs
+report back to GitHub. An `AgentTask` selects the Fullsend adapter, which runs
 the existing harness in its sandbox and reports bounded results to the
 `CustomRun`.
 
@@ -225,14 +225,14 @@ A cluster operator already runs the OpenShift Lightspeed Agentic Operator.
 Lightspeed owns `AgenticRun`, `AgenticRunApproval`, sandbox claims, step
 conditions, and typed result custom resources.
 
-An `AgentTask` selects a Lightspeed executor. The executor creates and observes
+An `AgentTask` selects a Lightspeed adapter. The adapter creates and observes
 an `AgenticRun`, preserves Lightspeed approvals and internal phases, and maps
 only the lifecycle and declared results needed by Tekton.
 
 #### Orchestrate a Remote Agent Service
 
 An organization runs an OpenHands Agent Server outside the Pipeline
-controller. An `AgentTask` selects an OpenHands executor. The executor starts a
+controller. An `AgentTask` selects an OpenHands adapter. The adapter starts a
 conversation, stores the conversation ID as the native execution reference,
 observes events until completion, and exposes result, log, and artifact
 references through the `CustomRun`.
@@ -240,7 +240,7 @@ references through the `CustomRun`.
 #### Run a Containerized Agent
 
 An agent is distributed as a Task or container and does not require a separate
-platform. A reference executor creates a child `TaskRun` and reuses Tekton's
+platform. A reference adapter creates a child `TaskRun` and reuses Tekton's
 existing Pod, workspace, result, log, and cancellation behavior. Authors who
 do not need the common `AgentTask` surface can continue to use that Task
 directly.
@@ -248,7 +248,7 @@ directly.
 #### Use a Protocol-Based Agent
 
 An agent already exposes a standard execution protocol such as A2A. An
-executor translates the common `AgentTask` lifecycle to that protocol. The
+adapter translates the common `AgentTask` lifecycle to that protocol. The
 protocol is an implementation choice; `AgentTask` does not copy protocol
 messages or platform-specific configuration into the Tekton API.
 
@@ -257,25 +257,25 @@ messages or platform-specific configuration into the Tekton API.
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | R1 | `AgentTask` MUST declare its Pipeline-visible parameters, workspaces, and results. | Must |
-| R2 | `AgentTask` MUST explicitly select one executor by a DNS-qualified name. | Must |
+| R2 | `AgentTask` MUST explicitly select one adapter by a DNS-qualified name. | Must |
 | R3 | A run-specific goal, event, or context MUST be provided through declared params or bound inputs, not by creating a new `AgentTask` definition for each run. | Must |
 | R4 | Pipeline MUST continue to use `CustomRun` as the execution record for `AgentTask`. | Must |
 | R5 | The proposal MUST NOT require a new `AgentRun` resource. | Must |
 | R6 | The framework MUST acknowledge or reject an execution within a bounded interval. | Must |
 | R7 | Execution creation MUST be idempotent across reconciliation and controller restart. | Must |
-| R8 | The native execution identity MUST be persisted or deterministically recoverable before the executor reports the run as accepted. | Must |
-| R9 | The executor MUST observe `CustomRun` cancellation and timeout and MUST drive the native execution toward termination. | Must |
+| R8 | The native execution identity MUST be persisted or deterministically recoverable before the adapter reports the run as accepted. | Must |
+| R9 | The adapter MUST observe `CustomRun` cancellation and timeout and MUST drive the native execution toward termination. | Must |
 | R10 | Terminal `CustomRun` status MUST distinguish successful completion, agent failure, infrastructure failure, `RunCancelled`, and expiry of `CustomRun.spec.timeout` with stable reasons. | Must |
-| R11 | The executor MUST confirm cleanup or leave a native execution reference and explicit cleanup failure. | Must |
+| R11 | The adapter MUST confirm cleanup or leave a native execution reference and explicit cleanup failure. | Must |
 | R12 | Declared scalar results MUST be consumable by downstream Pipeline tasks and `when` expressions. | Must |
 | R13 | Logs, artifacts, and traces MUST be represented by bounded references rather than copied unbounded into status. | Must |
-| R14 | The effective `AgentTask` identity, executor name, executor version, and native execution reference MUST be available for provenance. | Must |
-| R15 | The framework MUST validate and present the `CustomRun` service account name and workspace bindings to the executor; the executor MUST document its mapping or reject an unsupported binding. | Must |
+| R14 | The effective `AgentTask` identity, adapter name, adapter version, and native execution reference MUST be available for provenance. | Must |
+| R15 | The framework MUST validate and present the `CustomRun` service account name and workspace bindings to the adapter; the adapter MUST document its mapping or reject an unsupported binding. | Must |
 | R16 | Credentials and Secret values MUST NOT be placed in `AgentTask` params, `CustomRun` results, status messages, logs references, or provenance. | Must |
-| R17 | An executor MUST document its mapping to native sandbox, approval, tool, model, and agent-loop controls and MUST NOT silently bypass those controls. | Must |
+| R17 | An adapter MUST document its mapping to native sandbox, approval, tool, model, and agent-loop controls and MUST NOT silently bypass those controls. | Must |
 | R18 | A retry after native execution starts MUST create a distinct attempt identity and MUST NOT occur merely because reconciliation returned a transient error. | Must |
-| R19 | Executors MUST be independently installable and MUST receive only the RBAC needed for their backend. | Must |
-| R20 | The project MUST publish an executor conformance suite and a minimal implementation template. | Must |
+| R19 | Adapters MUST be independently installable and MUST receive only the RBAC needed for their backend. | Must |
+| R20 | The project MUST publish an adapter conformance suite and a minimal implementation template. | Must |
 | R21 | `AgentTask` definitions SHOULD be resolvable and pinned using Tekton remote resolution. | Should |
 | R22 | Tekton Results SHOULD persist the complete `CustomRun` lifecycle and discover referenced agent logs and artifacts. | Should |
 | R23 | Tekton Chains SHOULD attest completed `AgentTask` executions. | Should |
@@ -286,7 +286,7 @@ messages or platform-specific configuration into the Tekton API.
 
 **AgentTask**
 : A reusable, namespaced Custom Task definition. It declares the
-  Pipeline-visible contract and selects an executor. It does not describe a
+  Pipeline-visible contract and selects an adapter. It does not describe a
   model, prompt format, tool protocol, or sandbox.
 
 **CustomRun**
@@ -294,29 +294,27 @@ messages or platform-specific configuration into the Tekton API.
   `CustomRun` represents one `AgentTask` attempt history. There is no separate
   `AgentRun`.
 
-**Agent executor**
-: An implementation that translates the common lifecycle to a native
-  execution. It may create a Kubernetes workload, create another custom
-  resource, call a remote service, or use a standard protocol.
+**AgentTask Adapter**
+: An active `CustomRun` controller that maps an `AgentTask` invocation to one
+  native execution backend. It owns creation or adoption, observation,
+  cancellation, cleanup, and result mapping. It may create a Kubernetes
+  workload or custom resource, call a remote service, or use a standard
+  protocol. It is an implementation role, not a new CRD, central plugin
+  registry, sidecar, or mandatory network service.
 
-**Agent Executor Framework**
+**AgentTask Adapter Framework**
 : Shared controller machinery that loads and validates `AgentTask`, routes a
   `CustomRun`, manages the common lifecycle, and normalizes observations from
-  an executor.
-
-**Adapter**
-: The implementation role played by an executor when it bridges Tekton to an
-  existing platform. It is not a new CRD, central plugin registry, sidecar, or
-  mandatory network service.
+  an adapter.
 
 The responsibilities are intentionally split:
 
 | Component | Contribution |
 |-----------|--------------|
 | `CustomRun` | Per-run params and workspaces, Pipeline ownership, retries, timeout and cancellation requests, conditions, and results. |
-| `AgentTask` | Reusable declarations, explicit executor binding, definition identity, and validation independent of one invocation. |
-| Agent Executor Framework | Selection, bounded claim, idempotency, status normalization, cancellation, cleanup, and conformance. |
-| Executor | Creation and observation of the platform-native execution and mapping of native outputs. |
+| `AgentTask` | Reusable declarations, explicit adapter binding, definition identity, and validation independent of one invocation. |
+| AgentTask Adapter Framework | Selection, bounded claim, idempotency, status normalization, cancellation, cleanup, and conformance. |
+| Adapter | Creation and observation of the platform-native execution and mapping of native outputs. |
 
 `AgentTask` therefore contributes more than another reference around
 `CustomRun`: it gives different implementations one reusable contract that can
@@ -332,17 +330,17 @@ flowchart LR
     PR --> CR[CustomRun]
     AT[AgentTask] --> CR
 
-    subgraph Framework[Agent Executor Framework]
+    subgraph Framework[AgentTask Adapter Framework]
       Lifecycle[pre-claim validation and routing]
-      Route[executor selection]
+      Route[adapter selection]
     end
 
     CR --> Lifecycle --> Route
 
-    Route --> FS[Fullsend controller<br/>framework + executor]
-    Route --> LS[Lightspeed controller<br/>framework + executor]
-    Route --> OH[OpenHands controller<br/>framework + executor]
-    Route --> TR[TaskRun controller<br/>framework + executor]
+    Route --> FS[Fullsend controller<br/>framework + adapter]
+    Route --> LS[Lightspeed controller<br/>framework + adapter]
+    Route --> OH[OpenHands controller<br/>framework + adapter]
+    Route --> TR[TaskRun controller<br/>framework + adapter]
 
     FS --> Job[Kubernetes Job and native sandbox]
     LS --> AR[AgenticRun]
@@ -359,12 +357,12 @@ flowchart LR
 
 Pipeline scheduling remains unchanged. When a `PipelineTask.taskRef` has the
 `AgentTask` API version and kind, Pipeline treats it as a Custom Task and
-creates a `CustomRun`. The framework and selected executor reconcile that
+creates a `CustomRun`. The framework and selected adapter reconcile that
 `CustomRun`; Pipeline waits on its standard `Succeeded` condition and consumes
 its standard results.
 
-The executor name is part of the definition rather than the `PipelineTask`.
-Pipeline authors therefore do not repeat executor plumbing at every
+The adapter name is part of the definition rather than the `PipelineTask`.
+Pipeline authors therefore do not repeat adapter plumbing at every
 invocation. Changing the implementation publishes a versioned AgentTask and
 updates references through the same promotion process used for other Task
 definitions.
@@ -390,23 +388,23 @@ spec:
       description: The immutable source revision to inspect.
   workspaces:
     - name: source
-      description: Checked-out source for executors that support a workspace.
+      description: Checked-out source for adapters that support a workspace.
   results:
     - name: outcome
-      description: The executor-defined review outcome.
+      description: The adapter-defined review outcome.
     - name: report-url
       description: A reference to the complete report.
-  executorRef:
-    name: fullsend.ai/executor
+  adapterRef:
+    name: fullsend.ai/agenttask-adapter
     params:
       - name: agent
         value: review
 ```
 
 `spec.params`, `spec.workspaces`, and `spec.results` are the reusable contract.
-`spec.executorRef` binds that contract to an installed implementation.
-Executor params identify existing platform configuration, such as a Fullsend
-agent, a Lightspeed executor profile, an OpenHands profile, or a Task.
+`spec.adapterRef` binds that contract to an installed implementation.
+Adapter params identify existing platform configuration, such as a Fullsend
+agent, a Lightspeed adapter profile, an OpenHands profile, or a Task.
 
 The following do not become portable `AgentTask` fields:
 
@@ -478,16 +476,16 @@ Pipeline authors use normal task dependencies, params, workspaces, result
 references, retries, timeouts, `when` expressions, and finally tasks. Creating
 a `CustomRun` directly remains the standalone invocation mechanism.
 
-### Agent Executor Framework
+### AgentTask Adapter Framework
 
 The framework follows the resolver framework's extension model but uses a
 non-blocking reconciliation contract. It consists of a small pre-claim
-lifecycle reconciler and a controller library embedded in each Go executor
-controller. The library calls the executor implementation in-process; there is
+lifecycle reconciler and a controller library embedded in each Go adapter
+controller. The library calls the adapter implementation in-process; there is
 no unspecified RPC or intermediate request resource.
 
-Each executor is compiled and deployed as a controller. A distribution may
-bundle several executor controllers in one binary, as Tekton does for built-in
+Each adapter is compiled and deployed as a controller. A distribution may
+bundle several adapter controllers in one binary, as Tekton does for built-in
 resolvers, but this is packaging rather than a dynamic plugin system.
 
 #### Framework Responsibilities
@@ -496,22 +494,22 @@ The framework:
 
 1. watches `CustomRun`s that reference or embed `AgentTask`;
 2. loads or resolves the effective `AgentTask`;
-3. validates declared params, workspaces, results, and executor selection;
-4. records the effective definition identity and executor selection;
-5. gives an installed executor a bounded claim interval;
+3. validates declared params, workspaces, results, and adapter selection;
+4. records the effective definition identity and adapter selection;
+5. gives an installed adapter a bounded claim interval;
 6. initializes standard conditions, attempt identity, and timestamps;
 7. supplies a stable idempotency key derived from the `CustomRun` UID and
    attempt number;
 8. handles framework-owned cancellation, timeout, heartbeat, and finalizer
    behavior;
-9. serializes executor observations into standard conditions, results, and
+9. serializes adapter observations into standard conditions, results, and
    bounded references;
 10. emits Tekton events and metrics; and
-11. prevents two executor controllers from owning the same run.
+11. prevents two adapter controllers from owning the same run.
 
-#### Executor Responsibilities
+#### AgentTask Adapter Responsibilities
 
-An executor:
+An adapter:
 
 1. validates implementation-specific params without exposing credentials;
 2. creates or adopts exactly one native execution for an attempt;
@@ -523,16 +521,16 @@ An executor:
 8. maps declared scalar results; and
 9. publishes references to logs, artifacts, traces, and native detail.
 
-In the Go path, the executor implementation does not patch `CustomRun`; it
+In the Go path, the adapter implementation does not patch `CustomRun`; it
 returns an observation to the framework wrapper in the same process. After an
 atomic claim, that wrapper is the sole status writer for the run. The
 pre-claim reconciler no longer mutates its status.
 
-#### Bring Your Own Executor
+#### Bring Your Own AgentTask Adapter
 
 An agent platform author has two supported paths:
 
-- Implement the Go executor interface and use the supplied controller
+- Implement the Go adapter interface and use the supplied controller
   framework and project template.
 - Implement a controller directly against the `AgentTask` and `CustomRun`
   APIs. After claiming a run, that controller becomes its sole status writer
@@ -540,16 +538,16 @@ An agent platform author has two supported paths:
   conformance requirements. This permits implementations in other languages.
 
 An implementation advertises a DNS-qualified selector such as
-`fullsend.ai/executor`. Installing that implementation does not require adding
+`fullsend.ai/agenttask-adapter`. Installing that implementation does not require adding
 a platform-specific CRD to Tekton or registering code in a central service.
 The implementation may, of course, use its own CRDs behind the boundary.
 
 A platform that already implements a suitable execution protocol can provide a
-thin protocol executor. A platform without such a protocol provides a native
+thin protocol adapter. A platform without such a protocol provides a native
 controller or API bridge. Merely placing an opaque object reference in
-`AgentTask` is insufficient: the executor must implement the common lifecycle.
+`AgentTask` is insufficient: the adapter must implement the common lifecycle.
 
-### Worked Adapter Examples
+### Worked AgentTask Adapter Examples
 
 The following examples are non-normative. They validate that the common
 boundary accommodates materially different platforms. Fullsend workflow
@@ -561,7 +559,7 @@ Each adapter must define the same boundary explicitly:
 | Adapter | Native identity | Workspace and identity | Results and observability | Cancellation and cleanup |
 |---------|-----------------|------------------------|---------------------------|--------------------------|
 | Fullsend | Deterministic Job name or service run ID keyed by the CustomRun attempt. | Mount the bound workspace into the Job, or upload an immutable snapshot; use the CustomRun service account only for a Kubernetes workload. | Validated Fullsend output becomes declared scalar results plus report and transcript references. | Stop the Job or service run, observe termination, and remove run-scoped sandbox resources. |
-| Lightspeed | Deterministic `AgenticRun` name and UID. | Map only bindings supported by the selected executor profile; otherwise reject them. Lightspeed retains sandbox identity. | Map terminal conditions and scalar summaries; reference typed result CRs and sandbox logs. | Request the supported native stop operation or deletion, observe a terminal condition, and confirm child cleanup. |
+| Lightspeed | Deterministic `AgenticRun` name and UID. | Map only bindings supported by the selected adapter profile; otherwise reject them. Lightspeed retains sandbox identity. | Map terminal conditions and scalar summaries; reference typed result CRs and sandbox logs. | Request the supported native stop operation or deletion, observe a terminal condition, and confirm child cleanup. |
 | OpenHands | Conversation ID persisted before acceptance. | Use an operator-managed workspace/profile mapping and workload identity; never send the Kubernetes service-account token. | Map bounded terminal values; reference the conversation, trajectory, workspace artifacts, and logs. | Request stop/delete, confirm authoritative conversation termination, then apply the configured workspace-retention policy. |
 
 #### Fullsend
@@ -589,8 +587,8 @@ spec:
   results:
     - name: outcome
     - name: report-url
-  executorRef:
-    name: fullsend.ai/executor
+  adapterRef:
+    name: fullsend.ai/agenttask-adapter
     params:
       - name: agent
         value: review
@@ -642,16 +640,16 @@ This follows the integration model in the Lightspeed
 [Component Developer Guide][lightspeed-component-guide]. In that model, a
 component-owned adapter receives an event and creates a namespaced
 `AgenticRun`; the operator owns the subsequent agent and sandbox lifecycle. A
-Lightspeed executor plays that adapter role for a Tekton `CustomRun`. The
+Lightspeed adapter plays that adapter role for a Tekton `CustomRun`. The
 guide's current step 3 is **Create an AgenticRun**. `Proposed` is a phase
 derived later from `AgenticRun` conditions, not a separate Proposal resource.
 
-A Lightspeed-backed `AgentTask` selects the executor and an executor-managed
+A Lightspeed-backed `AgentTask` selects the adapter and an adapter-managed
 profile. The profile is adapter configuration that materializes Lightspeed's
 inline workflow fields; it is not a new Lightspeed CRD:
 
 ```yaml
-executorRef:
+adapterRef:
   name: lightspeed.openshift.io/agenticrun
   params:
     - name: profile
@@ -668,7 +666,7 @@ The adapter would:
    `CustomRun` service account name does not authorize the controller's API
    request;
 3. map the declared request and target namespaces, then let the selected
-   executor profile materialize native workflow shape, agent names,
+   adapter profile materialize native workflow shape, agent names,
    `analysisOutput`, skills images, tools, and same-namespace
    `requiredSecrets` references;
 4. keep Secret values out of `AgentTask` and `CustomRun` and reject any
@@ -696,14 +694,14 @@ conversation history, and provider configuration.
 An OpenHands-backed definition selects an operator-managed profile:
 
 ```yaml
-executorRef:
+adapterRef:
   name: openhands.dev/agent-server
   params:
     - name: profile
       value: repository-change
 ```
 
-The executor would:
+The adapter would:
 
 1. create a conversation using the declared goal and profile;
 2. map a bound workspace through the profile's documented repository,
@@ -720,13 +718,13 @@ The executor would:
 8. on cancellation or timeout, request stop/delete, confirm authoritative
    termination, and apply the configured workspace-retention policy.
 
-The `AgentTask` does not embed an OpenHands conversation request. Executor
+The `AgentTask` does not embed an OpenHands conversation request. Adapter
 params refer to an operator-managed OpenHands profile, while run-specific
 values remain declared Tekton params.
 
-#### Reference TaskRun Executor
+#### Reference TaskRun AgentTask Adapter
 
-A reference executor may create a child `TaskRun` for users whose agent is
+A reference adapter may create a child `TaskRun` for users whose agent is
 already packaged as a Tekton Task. It would:
 
 - resolve the referenced Task using existing resolution support;
@@ -737,7 +735,7 @@ already packaged as a Tekton Task. It would:
   support; and
 - propagate only declared AgentTask results.
 
-This executor is an onboarding and conformance implementation, not a reason to
+This adapter is an onboarding and conformance implementation, not a reason to
 wrap every Task. If the Pipeline does not need a portable `AgentTask`
 contract, the Task should be referenced directly.
 
@@ -756,15 +754,15 @@ The existing resolver architecture provides useful patterns:
 
 | Resolver pattern | Agent execution use |
 |------------------|---------------------|
-| Explicit selector | `executorRef.name` |
+| Explicit selector | `adapterRef.name` |
 | `ResolutionRequest` envelope | Existing `CustomRun` envelope |
 | Deterministic request identity | Attempt idempotency key and native name |
 | Owner references | Native Kubernetes child ownership |
-| Shared framework and template | Agent Executor Framework and template |
-| ConfigMap watcher | Optional executor administrator configuration |
-| Narrow per-resolver RBAC | Narrow per-executor RBAC |
+| Shared framework and template | AgentTask Adapter Framework and template |
+| ConfigMap watcher | Optional adapter administrator configuration |
+| Narrow per-resolver RBAC | Narrow per-adapter RBAC |
 | Source and digest metadata | Resolved AgentTask identity and digest |
-| Conformance tests | Executor lifecycle conformance |
+| Conformance tests | Adapter lifecycle conformance |
 
 The resolver method set itself is not reused. `Resolve` performs a bounded
 fetch and returns immutable bytes. Agent execution must persist a native
@@ -801,7 +799,7 @@ message-specific event schema.
 
 Tekton Results already persists the `CustomRun` lifecycle. It does not collect
 CustomRun logs because a Custom Task is not necessarily Pod-backed. This TEP
-requires an executor to publish log and artifact references. A Results
+requires an adapter to publish log and artifact references. A Results
 integration should discover those references and associate external log
 providers or records with the owning `CustomRun` and `PipelineRun`.
 
@@ -818,7 +816,7 @@ attestation must include completed AgentTask evidence.
 The minimum attested evidence is:
 
 - effective AgentTask name, UID, resource version, and content digest;
-- executor selector and implementation version;
+- adapter selector and implementation version;
 - `CustomRun` UID and attempt identity;
 - native execution reference or a privacy-preserving digest;
 - declared input source references and digests when available;
@@ -831,28 +829,28 @@ sensitive model responses are excluded by default.
 ### Security and Responsibility Boundaries
 
 The framework is responsible for secure lifecycle plumbing, not for replacing
-an executor's sandbox or tool policy.
+an adapter's sandbox or tool policy.
 
 | Concern | Owner |
 |---------|-------|
 | Pipeline ordering, timeout request, workspace binding, service account selection | Tekton Pipeline and CustomRun |
-| AgentTask validation, executor claim, common status, idempotency, cancellation coordination | Agent Executor Framework |
+| AgentTask validation, adapter claim, common status, idempotency, cancellation coordination | AgentTask Adapter Framework |
 | Model, prompt, tools, memory, internal approvals, sandbox, native policy | Selected agent platform |
-| Mapping Tekton identity and inputs into the platform without credential leakage | Executor |
+| Mapping Tekton identity and inputs into the platform without credential leakage | Adapter |
 | Cluster admission, namespace quotas, network policy, and workload policy | Cluster operator |
-| External-service identity and short-lived credential exchange | Executor/platform identity provider |
+| External-service identity and short-lived credential exchange | Adapter/platform identity provider |
 | Result, log, artifact, and provenance access control | Tekton installation and backend operators |
 
-Executor controllers receive the `CustomRun` service account name, but their
+Adapter controllers receive the `CustomRun` service account name, but their
 own Kubernetes API calls still use the controller's identity and RBAC. The
-field does not grant impersonation. A Kubernetes executor may create a child
+field does not grant impersonation. A Kubernetes adapter may create a child
 workload using the selected service account if its controller is authorized to
-do so. A remote executor must not copy a service-account bearer token into a
+do so. A remote adapter must not copy a service-account bearer token into a
 remote service; it should use workload identity or an explicit, scoped
 exchange supported by its platform.
 
 A workspace binding is authority to use the bound data only through the
-executor's documented mapping. An executor that cannot safely map a workspace
+adapter's documented mapping. An adapter that cannot safely map a workspace
 must reject it with `CustomRunWorkspaceNotSupported` rather than silently
 ignoring it.
 
@@ -864,7 +862,7 @@ ignoring it.
 - `CustomRun.status.extraFields` is schemaless. The alpha framework can define
   and version a reserved AgentTask status profile there, but a future
   `CustomRun` API should provide typed execution and artifact references.
-- Existing custom controllers are not automatically conformant executors.
+- Existing custom controllers are not automatically conformant adapters.
   They must implement the acknowledgement, idempotency, cancellation,
   cleanup, and status contract.
 - Native approval remains platform-specific. Tekton can display a waiting
@@ -873,9 +871,9 @@ ignoring it.
 - An agent may complete successfully while returning a negative business
   decision such as `approved=false`. That is a successful execution with a
   result, not an infrastructure failure.
-- DNS-qualified executor names prevent accidental naming collisions but do
+- DNS-qualified adapter names prevent accidental naming collisions but do
   not provide installation discovery. The alpha design uses bounded claiming;
-  an `ExecutorClass` resource may be considered later only if operational
+  an `AgentTaskAdapterClass` resource may be considered later only if operational
   discovery and capability advertisement prove necessary.
 
 ## Design Details
@@ -890,10 +888,10 @@ type AgentTaskSpec struct {
     Params      []ParamSpec            `json:"params,omitempty"`
     Workspaces  []WorkspaceDeclaration `json:"workspaces,omitempty"`
     Results     []AgentTaskResult       `json:"results,omitempty"`
-    ExecutorRef ExecutorRef             `json:"executorRef"`
+    AdapterRef  AgentTaskAdapterRef    `json:"adapterRef"`
 }
 
-type ExecutorRef struct {
+type AgentTaskAdapterRef struct {
     Name   string  `json:"name"`
     Params []Param `json:"params,omitempty"`
 }
@@ -910,13 +908,13 @@ strings because `CustomRunResult.Value` is currently a string.
 
 Normative validation includes:
 
-- `executorRef.name` is required and DNS-qualified;
+- `adapterRef.name` is required and DNS-qualified;
 - param, workspace, and result names are unique;
-- executor params have unique names;
+- adapter params have unique names;
 - runtime params not declared by the AgentTask are rejected;
 - required params and workspaces are present;
-- result names produced by an executor were declared; and
-- `executorRef` and the Pipeline-visible contract are immutable.
+- result names produced by an adapter were declared; and
+- `adapterRef` and the Pipeline-visible contract are immutable.
 
 Immutability prevents an in-flight reference from silently changing meaning.
 A changed implementation or contract uses a new AgentTask name or resolved
@@ -926,10 +924,10 @@ The API does not require a cluster-scoped `ClusterAgentTask`. Namespaced
 resources, remote resolution, and normal promotion tooling cover the initial
 use cases without a second definition kind.
 
-### Executor Selection and Claiming
+### AgentTask Adapter Selection and Claiming
 
 Current Custom Task filters distinguish only API version and kind. Every
-AgentTask executor would therefore observe the same `CustomRun` kind unless a
+AgentTask adapter would therefore observe the same `CustomRun` kind unless a
 second selector is introduced.
 
 The framework uses this sequence:
@@ -937,20 +935,20 @@ The framework uses this sequence:
 1. The AgentTask lifecycle reconciler loads the referenced or embedded
    definition and validates it.
 2. It writes the immutable label
-   `agent.tekton.dev/executor=<encoded-selector>` and the effective AgentTask
+   `agent.tekton.dev/adapter=<encoded-selector>` and the effective AgentTask
    digest to the `CustomRun`.
-3. Executor controllers filter on that label and independently reconcile only
+3. Adapter controllers filter on that label and independently reconcile only
    their selector.
-4. A matching executor atomically writes its stable installation identity,
+4. A matching adapter atomically writes its stable installation identity,
    `claimedAt`, and initial heartbeat to the reserved AgentTask status. All
    replicas of one controller deployment share that installation identity.
-5. After the claim succeeds, the framework wrapper embedded in that executor
+5. After the claim succeeds, the framework wrapper embedded in that adapter
    controller is the sole status writer. The pre-claim reconciler stops
    mutating status, and a controller with a different installation identity
    stops when it observes the claim.
-6. If no executor claims the run before the configured acknowledgement
+6. If no adapter claims the run before the configured acknowledgement
    deadline, the pre-claim reconciler marks it failed with
-   `ExecutorNotFound`.
+   `AgentTaskAdapterNotFound`.
 
 The label value must use a reversible or collision-resistant encoding because
 Kubernetes label values cannot contain every character allowed in a
@@ -958,16 +956,16 @@ DNS-qualified selector. The unmodified selector remains in status and
 provenance.
 
 This uses the existing `CustomRun` as the request envelope. It does not add an
-executor registration CRD or an internal `AgentExecutionRequest` that would
+adapter registration CRD or an internal `AgentExecutionRequest` that would
 become a second run record.
 
-### Executor Interface
+### AgentTask Adapter Interface
 
 A Go interface may resemble the following, but observable behavior rather
 than this exact method set is normative:
 
 ```go
-type Executor interface {
+type AgentTaskAdapter interface {
     Initialize(context.Context) error
     Name(context.Context) string
     Validate(context.Context, *AgentTask, *CustomRun) error
@@ -977,7 +975,7 @@ type Executor interface {
 ```
 
 `Request` contains the effective immutable AgentTask, CustomRun, attempt
-identity, selected service account, workspace bindings, and executor
+identity, selected service account, workspace bindings, and adapter
 administrator configuration.
 
 `Observation` contains bounded state:
@@ -992,7 +990,7 @@ type Observation struct {
     Logs           []Reference
     Artifacts      []Reference
     Traces         []Reference
-    RequeueAfter   time.Duration
+    RequeueAfter    time.Duration
     CleanupComplete bool
 }
 ```
@@ -1000,10 +998,10 @@ type Observation struct {
 `Reconcile` and `Cancel` must return quickly. A long operation happens in the
 native platform; the controller watches, polls, or requeues. Implementations
 must not retain the only copy of execution state in process memory. For this
-interface, the framework wrapper and executor implementation run in the same
+interface, the framework wrapper and adapter implementation run in the same
 controller process; `Observation` is not a network protocol.
 
-An executor error means the controller could not complete reconciliation. It
+An adapter error means the controller could not complete reconciliation. It
 is not automatically an agent failure. Typed errors distinguish transient
 controller/backend errors, invalid requests, missing dependencies, and
 terminal native failures.
@@ -1013,7 +1011,7 @@ terminal native failures.
 ```mermaid
 stateDiagram-v2
     [*] --> Pending
-    Pending --> Accepted: executor claims and persists native identity
+    Pending --> Accepted: adapter claims and persists native identity
     Pending --> Failed: invalid or acknowledgement deadline
     Accepted --> Running
     Running --> Waiting: native approval or external input
@@ -1045,7 +1043,7 @@ common lifecycle.
 
 #### Acknowledgement
 
-A run is accepted only after the executor has either:
+A run is accepted only after the adapter has either:
 
 - created or adopted a native execution and persisted its reference; or
 - reserved an idempotent remote execution key that can be recovered after a
@@ -1053,7 +1051,7 @@ A run is accepted only after the executor has either:
 
 Merely receiving an informer event is not acknowledgement. The framework
 records claim and acceptance latency. An unclaimed or repeatedly unavailable
-executor produces a terminal condition rather than leaving a Pipeline waiting
+adapter produces a terminal condition rather than leaving a Pipeline waiting
 indefinitely.
 
 #### Idempotency and Recovery
@@ -1064,18 +1062,18 @@ The framework supplies an idempotency key derived from:
 <CustomRun UID>:<attempt number>
 ```
 
-Kubernetes executors use a deterministic child name plus owner or correlation
-metadata. Remote executors pass an idempotency key when supported and persist
+Kubernetes adapters use a deterministic child name plus owner or correlation
+metadata. Remote adapters pass an idempotency key when supported and persist
 the returned native ID. When the backend lacks idempotent creation, the
 adapter must implement lookup by correlation key before creating another run.
 
-On restart, the executor first adopts the recorded or deterministic native
+On restart, the adapter first adopts the recorded or deterministic native
 execution. It must not create another execution because an in-memory cache was
 lost.
 
 #### Progress and Heartbeats
 
-The executor framework records bounded progress messages and a heartbeat while
+The adapter framework records bounded progress messages and a heartbeat while
 an execution is active. A heartbeat proves that the controller can still
 observe the backend; it does not require the agent itself to emit synthetic
 progress.
@@ -1083,16 +1081,16 @@ progress.
 A stale heartbeat is an observability and alerting signal; it does not by
 itself rewrite the run's terminal state. Another replica with the same stable
 installation identity may reconcile and adopt the native execution. Automatic
-takeover by a differently configured executor installation is not permitted.
-If the selected executor later proves that the native execution failed, it
+takeover by a differently configured adapter installation is not permitted.
+If the selected adapter later proves that the native execution failed, it
 reports `InfrastructureFailed` and preserves the native reference.
 
 #### Cancellation and Timeout
 
 Pipeline cancellation is expressed through the existing
-`CustomRun.spec.status=RunCancelled`. Before an executor claims the run, the
+`CustomRun.spec.status=RunCancelled`. Before an adapter claims the run, the
 pre-claim reconciler can terminate it immediately because no native execution
-exists. After claim, the selected framework wrapper calls the executor's
+exists. After claim, the selected framework wrapper calls the adapter's
 cancellation path until the backend confirms terminal state or the cleanup
 deadline expires, then uses the existing `CustomRunCancelled` reason.
 
@@ -1103,9 +1101,9 @@ CustomRun does not carry.
 
 `CustomRun.spec.timeout` is separately authoritative for the invocation. If it
 expires before claim, the pre-claim reconciler marks the run timed out without
-calling an executor. After claim, the selected wrapper requests native
+calling an adapter. After claim, the selected wrapper requests native
 termination and, after confirmation, uses the existing
-`CustomRunTimedOut` reason. An executor should also configure a native timeout
+`CustomRunTimedOut` reason. An adapter should also configure a native timeout
 when the backend supports one, but a missing native timeout does not remove
 the framework's obligation to act.
 
@@ -1119,7 +1117,7 @@ Kubernetes child resources use controller references when valid. Cross-
 namespace resources and remote executions use correlation labels or IDs and a
 finalizer on the `CustomRun`.
 
-The finalizer remains until the executor confirms that run-scoped resources
+The finalizer remains until the adapter confirms that run-scoped resources
 are deleted or intentionally retained by a declared backend policy. The
 framework uses an operator-configured maximum cleanup interval so a broken
 remote service cannot block Kubernetes deletion forever. Expiry removes the
@@ -1133,7 +1131,7 @@ Controller reconciliation retries and agent execution retries are different:
 - `CustomRun.spec.retries` is the maximum number of additional execution
   attempts. The current zero-based attempt number is
   `len(status.retriesStatus)`.
-- When an executor reports a terminal retryable failure, the framework first
+- When an adapter reports a terminal retryable failure, the framework first
   confirms native termination and cleanup. If retries remain, it appends a
   deep copy of the completed current status, including its condition,
   execution reference, and AgentTask extra fields, to
@@ -1149,7 +1147,7 @@ Controller reconciliation retries and agent execution retries are different:
 Because the archived retry status is the authoritative attempt counter, a
 controller restart cannot increment it from memory. Because agents may make
 external changes, the framework never starts a new attempt solely because
-status observation temporarily failed. The executor explicitly marks whether
+status observation temporarily failed. The adapter explicitly marks whether
 a terminal infrastructure failure is safe to retry.
 
 ### Status and Outcome Semantics
@@ -1164,10 +1162,10 @@ Pipeline continues to read the standard `Succeeded` condition:
 | Unknown | `WaitingForApproval` | Native platform is waiting for human or external input. |
 | True | `Succeeded` | Invocation completed and declared results are valid. |
 | False | `InvalidAgentTask` | Definition or runtime bindings are invalid. |
-| False | `ExecutorNotFound` | No matching executor claimed the run. |
+| False | `AgentTaskAdapterNotFound` | No matching adapter claimed the run. |
 | False | `AgentFailed` | Native agent completed unsuccessfully. |
-| False | `InfrastructureFailed` | Executor, platform, sandbox, or workload failed. |
-| False | `CustomRunWorkspaceNotSupported` | The selected executor cannot honor a bound workspace. |
+| False | `InfrastructureFailed` | Adapter, platform, sandbox, or workload failed. |
+| False | `CustomRunWorkspaceNotSupported` | The selected adapter cannot honor a bound workspace. |
 | False | `CustomRunCancelled` | A `RunCancelled` request was observed and native termination was confirmed. |
 | False | `CustomRunTimedOut` | `CustomRun.spec.timeout` elapsed and native termination was confirmed. |
 | False | `CleanupFailed` | Native termination or cleanup could not be confirmed. |
@@ -1187,10 +1185,10 @@ agentTask:
   uid: 6d3c...
   resourceVersion: "1042"
   digest: sha256:...
-executor:
-  name: fullsend.ai/executor
+adapter:
+  name: fullsend.ai/agenttask-adapter
   version: v0.1.0
-  installationID: fullsend-executor.production
+  installationID: fullsend-agenttask-adapter.production
   claimedAt: "..."
   lastHeartbeatTime: "..."
 attempt:
@@ -1216,30 +1214,30 @@ The status profile has these normative ownership and compatibility rules:
 |-------|----------|--------|------|
 | `schemaVersion` | Always | Pre-claim reconciler | Readers reject an unsupported major schema and ignore unknown additive fields. |
 | `agentTask` identity and digest | Always | Pre-claim reconciler | Immutable after routing; identifies the exact local or resolved definition. |
-| `executor.name` | Always | Pre-claim reconciler | Equals the unmodified `executorRef.name`. |
-| `executor.installationID`, version, and claim time | After claim | Selected framework wrapper | Written by compare-and-swap; immutable for the attempt. |
-| `executor.lastHeartbeatTime` | While active | Selected framework wrapper | Rate-limited and monotonically nondecreasing. |
+| `adapter.name` | Always | Pre-claim reconciler | Equals the unmodified `adapterRef.name`. |
+| `adapter.installationID`, version, and claim time | After claim | Selected framework wrapper | Written by compare-and-swap; immutable for the attempt. |
+| `adapter.lastHeartbeatTime` | While active | Selected framework wrapper | Rate-limited and monotonically nondecreasing. |
 | `attempt.number` and `attempt.id` | Always | Framework | Derived from retry history and CustomRun UID; immutable within an attempt. |
 | `executionRef` | From acceptance | Selected framework wrapper | Required before `Accepted`; immutable except to add server-assigned identity fields. |
 | `logs`, `artifacts`, and `traces` | Optional | Selected framework wrapper | At most 32 references per category; names are unique and URIs are at most 2048 bytes. |
 
 Condition messages are at most 4096 bytes. Each status writer uses a
 resource-version-checked patch. The pre-claim reconciler writes only while no
-executor claim exists; after claim, the selected framework wrapper owns the
+adapter claim exists; after claim, the selected framework wrapper owns the
 profile and standard condition. A conformant direct controller assumes that
 same post-claim writer role.
 
 URI schemes are not limited to HTTP. References may identify Kubernetes
 objects, OCI artifacts, Tekton Results records, or platform-native resources.
 References must be usable without an embedded credential. The profile schema
-is versioned independently from native executor detail.
+is versioned independently from native adapter detail.
 
 ### Results, Logs, Artifacts, and Traces
 
 Declared scalar results are written to `CustomRun.status.results`; undeclared
 results are rejected. Result names follow ordinary Tekton substitution rules.
 
-The complete agent transcript is not a result. Executors publish logs through
+The complete agent transcript is not a result. Adapters publish logs through
 one of these paths:
 
 - Pod/TaskRun logs for Kubernetes workloads;
@@ -1252,26 +1250,26 @@ name and URI and may include media type, digest, and size. A reference must not
 contain a bearer token or embedded credential. Access is controlled by the
 referenced backend.
 
-Executors must truncate condition messages and reject status payloads that
+Adapters must truncate condition messages and reject status payloads that
 would approach Kubernetes object-size limits.
 
 ### Parameters and Workspaces
 
 Runtime params are validated against the AgentTask declaration before an
-executor receives them. Params are data, not a place for credentials or
+adapter receives them. Params are data, not a place for credentials or
 unbounded source archives.
 
 A workspace declaration describes a Pipeline-visible input or output binding.
-Mapping is executor-specific:
+Mapping is adapter-specific:
 
-- a TaskRun or Job executor may mount the bound volume;
+- a TaskRun or Job adapter may mount the bound volume;
 - a native controller may pass an existing PVC reference if its API supports
   one;
-- a remote executor may upload a content-addressed snapshot or use an existing
+- a remote adapter may upload a content-addressed snapshot or use an existing
   repository reference; and
-- an executor unable to honor the binding rejects it.
+- an adapter unable to honor the binding rejects it.
 
-An executor must document whether writes are visible through the original
+An adapter must document whether writes are visible through the original
 workspace, returned as an artifact, or committed through the platform's native
 SCM integration. The common API does not silently equate those behaviors.
 
@@ -1279,18 +1277,18 @@ SCM integration. The common API does not silently equate those behaviors.
 
 `CustomRun.spec.serviceAccountName` identifies the Kubernetes identity selected
 for a child execution. The framework validates and presents the name to the
-executor; it does not cause framework or executor-controller API calls to run
+adapter; it does not cause framework or adapter-controller API calls to run
 as that service account. Those calls use the controller's own RBAC.
 
-A Kubernetes executor may set the selected service account on a child workload
-when its controller is authorized to do so. Impersonation, if an executor
+A Kubernetes adapter may set the selected service account on a child workload
+when its controller is authorized to do so. Impersonation, if an adapter
 chooses to support it, requires explicit impersonation RBAC and authorization
-checks and is not implied by this TEP. A remote executor must use an explicit
+checks and is not implied by this TEP. A remote adapter must use an explicit
 workload-identity exchange or backend credential binding. Copying a projected
 Kubernetes bearer token into a remote request is not conformant.
 
-Executor administrator configuration may reference Secrets through normal
-Kubernetes references. Secret values are read only by the executor that needs
+Adapter administrator configuration may reference Secrets through normal
+Kubernetes references. Secret values are read only by the adapter that needs
 them and never copied into AgentTask, CustomRun status, results, events,
 provenance, or command-line arguments.
 
@@ -1306,16 +1304,16 @@ executes that exact content. A retry uses the pinned definition unless the
 user creates a new CustomRun.
 
 Provenance records what Tekton can verify, not unverifiable claims about the
-agent's reasoning. An executor may add signed platform evidence, model or tool
+agent's reasoning. An adapter may add signed platform evidence, model or tool
 metadata, and policy decisions, but the common attestation distinguishes:
 
 - Tekton-observed definition and lifecycle data;
-- executor-reported metadata; and
+- adapter-reported metadata; and
 - externally verifiable artifact digests or attestations.
 
 ### Conformance
 
-The executor conformance suite creates `AgentTask` and `CustomRun` fixtures
+The adapter conformance suite creates `AgentTask` and `CustomRun` fixtures
 against a deterministic fake native backend. It verifies at least:
 
 1. valid run acceptance and successful scalar results;
@@ -1349,7 +1347,7 @@ substitution, Triggers, and remote resolution patterns.
 `AgentTask` is a definition rather than a per-run object. One definition can
 be invoked with different goals, repositories, revisions, and event context.
 The same Pipeline authoring surface works with a TaskRun, Fullsend,
-Lightspeed, OpenHands, or a protocol executor.
+Lightspeed, OpenHands, or a protocol adapter.
 
 The framework is deliberately scoped to agent executions rather than reviving
 a generic Custom Task SDK without concrete lifecycle requirements.
@@ -1368,11 +1366,11 @@ when a portable agent contract or non-Pod execution boundary is needed.
 
 ### Flexibility
 
-Executor implementations are independently deployed and may use Kubernetes
+Adapter implementations are independently deployed and may use Kubernetes
 resources, remote APIs, protocol clients, or child TaskRuns. Tekton does not
 import their SDKs into the Pipeline controller.
 
-Platform-specific behavior remains behind `executorRef`. This preserves
+Platform-specific behavior remains behind `adapterRef`. This preserves
 Fullsend harnesses and sandboxes, Lightspeed native approvals and typed
 results, and OpenHands conversations and workspaces.
 
@@ -1389,7 +1387,7 @@ The proposal introduces `AgentTask` and a versioned status profile but no new
 Pipeline concepts. API documentation must specify the relationship to Custom
 Tasks and the subset of Tekton result types supported by `CustomRun`.
 
-Executor authors must understand Kubernetes controller semantics. The
+Adapter authors must understand Kubernetes controller semantics. The
 framework and conformance suite remove repeated informer, claiming,
 idempotency, cancellation, and status code.
 
@@ -1397,17 +1395,17 @@ idempotency, cancellation, and status code.
 
 - **Pipeline authors** reference AgentTasks like other Custom Tasks and consume
   declared results.
-- **Agent platform authors** implement one executor lifecycle rather than a
+- **Agent platform authors** implement one adapter lifecycle rather than a
   complete Pipeline integration for every use case.
-- **Cluster operators** install approved executors, configure their RBAC and
+- **Cluster operators** install approved adapters, configure their RBAC and
   backends, and can identify the native execution from the CustomRun.
 - **Approvers** continue using the platform-native approval surface, linked
   from the CustomRun and Tekton UI.
-- **Security and supply-chain teams** receive stable executor, definition,
+- **Security and supply-chain teams** receive stable adapter, definition,
   result, and artifact evidence without storing sensitive transcripts in
   Kubernetes.
 
-`tkn` and Dashboard should show the common reason, executor, native reference,
+`tkn` and Dashboard should show the common reason, adapter, native reference,
 last heartbeat, declared results, and log/artifact links. Native detail may be
 shown by following the reference.
 
@@ -1415,11 +1413,11 @@ shown by following the reference.
 
 The additional lifecycle reconcile and AgentTask lookup are small compared
 with agent execution. Informers and indexes avoid listing definitions for each
-run. The projected executor label lets controllers filter before expensive
+run. The projected adapter label lets controllers filter before expensive
 backend calls.
 
-Polling executors use bounded exponential backoff and backend-provided retry
-hints. Kubernetes-native executors should watch child resources. Remote event
+Polling adapters use bounded exponential backoff and backend-provided retry
+hints. Kubernetes-native adapters should watch child resources. Remote event
 streams may trigger reconciliation but must not require one persistent stream
 per run in the controller process.
 
@@ -1430,16 +1428,16 @@ and Results writes. Large logs and artifacts stay out of the API server.
 
 | Risk | Mitigation |
 |------|------------|
-| Common API grows into a lowest-common-denominator agent runtime | Limit AgentTask to Pipeline-consumed declarations and executor selection; keep native configuration behind the boundary. |
-| Two executors claim a run | Atomic claim with stable installation identity; only the selected DNS-qualified executor may claim; a different claimant stops. |
+| Common API grows into a lowest-common-denominator agent runtime | Limit AgentTask to Pipeline-consumed declarations and adapter selection; keep native configuration behind the boundary. |
+| Two adapters claim a run | Atomic claim with stable installation identity; only the selected DNS-qualified adapter may claim; a different claimant stops. |
 | Controller restart duplicates external effects | Stable attempt identity, deterministic child names, idempotency keys, and adopt-before-create conformance tests. |
 | Backend is unreachable during cancellation | Reconcile cancellation until deadline; preserve native reference and report `CleanupFailed`. |
 | Automatic retry repeats external changes | Separate reconciliation retries from execution attempts; require terminal cleanup and explicit retryability. |
 | Status or logs expose credentials or prompts | Bounded references, Secret-redaction tests, no embedded tokens, and access-controlled backends. |
-| Workspace semantics differ between executors | Each executor documents the mapping and rejects unsupported bindings. |
+| Workspace semantics differ between adapters | Each adapter documents the mapping and rejects unsupported bindings. |
 | Platform-native approvals confuse Pipeline users | Standard `WaitingForApproval` reason plus a native approval reference; native system remains authoritative. |
-| Missing executor leaves a Pipeline waiting | Bounded claim deadline and terminal `ExecutorNotFound` status. |
-| Resolver and executor terminology become conflated | Keep resolution and execution as separate stages and interfaces. |
+| Missing adapter leaves a Pipeline waiting | Bounded claim deadline and terminal `AgentTaskAdapterNotFound` status. |
+| Resolver and adapter terminology become conflated | Keep resolution and execution as separate stages and interfaces. |
 | Results cannot collect CustomRun logs today | Standardize log references first; extend Results providers without assuming a Pod. |
 | Chains cannot attest CustomRuns today | Add explicit CustomRun/AgentTask support or include equivalent child evidence in PipelineRun attestation. |
 | AgentTask API couples Pipeline to new dependencies | Implement as a Custom Task extension; do not import platform SDKs into Pipeline. |
@@ -1452,11 +1450,11 @@ and Results writes. Large logs and artifacts stay out of the API server.
   the platform's UI or CRDs for approvals and detailed diagnosis.
 - `CustomRun` is still v1beta1 and has string-only results and schemaless
   extension status.
-- A bridging executor adds another reconciliation layer and may delay native
+- A bridging adapter adds another reconciliation layer and may delay native
   status by one reconcile interval.
 - Full provenance and logs require changes outside Tekton Pipelines, notably
   Results and Chains.
-- Independently installed executors create a compatibility matrix that must be
+- Independently installed adapters create a compatibility matrix that must be
   managed through conformance and supported-version documentation.
 
 ## Alternatives
@@ -1502,9 +1500,9 @@ would require ownership and status synchronization.
 The proposal instead versions agent-specific status within CustomRun and can
 promote generally useful fields into a future CustomRun API.
 
-### Introduce AgentExecutorClass
+### Introduce AgentTaskAdapterClass
 
-An `AgentExecutorClass` CRD could advertise installed implementations,
+An `AgentTaskAdapterClass` CRD could advertise installed implementations,
 capabilities, defaults, and readiness. It adds registration, lifecycle, RBAC,
 and failure modes before the need is demonstrated.
 
@@ -1515,12 +1513,12 @@ multi-tenant defaults.
 
 ### Standardize a Generic Agent Container Protocol
 
-A JSON stdin/stdout or OCI image contract would simplify a batch executor but
+A JSON stdin/stdout or OCI image contract would simplify a batch adapter but
 would force existing platforms to abandon or wrap their native lifecycle. It
 also duplicates ordinary Tasks for simple containers.
 
-A TaskRun reference executor provides this onboarding path with existing
-Tekton contracts. Other executors remain free to use a protocol internally.
+A TaskRun reference adapter provides this onboarding path with existing
+Tekton contracts. Other adapters remain free to use a protocol internally.
 
 ### Standardize an Opaque Implementation Reference
 
@@ -1530,7 +1528,7 @@ semantics. It would rename a Custom Task reference without improving
 interoperability.
 
 AgentTask therefore requires a Tekton-consumed contract and a conformant
-executor. Native configuration references remain executor params, not the
+adapter. Native configuration references remain adapter params, not the
 whole API.
 
 ### Use the Resolver Interface for Execution
@@ -1550,7 +1548,7 @@ resources. The same issue applies to choosing Fullsend, Lightspeed, OpenHands,
 or another platform: Tekton would inherit that platform's API and release
 cycle, and users of other systems would need a second abstraction.
 
-Each may instead provide an executor. The common API does not select a winner
+Each may instead provide an adapter. The common API does not select a winner
 among agent runtimes.
 
 ### Add Agent Fields to Pipeline
@@ -1563,33 +1561,33 @@ provide a composition point and avoid changing existing Pipeline resources.
 
 ### Milestones
 
-**Phase 1: Alpha contract and reference executor**
+**Phase 1: Alpha contract and reference adapter**
 
 - Define the namespaced `AgentTask` v1alpha1 CRD and validation.
 - Define and version the AgentTask profile in `CustomRun.status.extraFields`.
-- Implement lifecycle validation, executor routing label, bounded claim,
+- Implement lifecycle validation, adapter routing label, bounded claim,
   idempotency, timeout, cancellation, cleanup, and common status mapping.
-- Publish the executor Go framework, direct-controller documentation, and
+- Publish the adapter Go framework, direct-controller documentation, and
   project template.
-- Implement a deterministic fake executor and the conformance suite.
-- Implement the reference TaskRun executor.
+- Implement a deterministic fake adapter and the conformance suite.
+- Implement the reference TaskRun adapter.
 - Add `tkn` and Dashboard-readable labels, events, and status fields where
   feasible.
 
 **Phase 2: Existing-platform validation**
 
-- Implement and test a Fullsend reference executor using a Kubernetes workload
+- Implement and test a Fullsend reference adapter using a Kubernetes workload
   or managed service boundary while preserving its harness and sandbox.
 - Build contract-tested prototypes for an OpenShift Lightspeed Agentic
-  Operator executor using `AgenticRun`, native approvals, sandbox logs, and
-  typed result references, and an OpenHands executor using its conversation
+  Operator adapter using `AgenticRun`, native approvals, sandbox logs, and
+  typed result references, and an OpenHands adapter using its conversation
   and event APIs.
 - Decide production ownership with each upstream community before promising a
   supported adapter release.
-- Publish the three adapter mappings and an executor compatibility and
+- Publish the three adapter mappings and an adapter compatibility and
   supported-version matrix.
 
-Additional protocol executors, such as an A2A bridge, use the same public
+Additional protocol adapters, such as an A2A bridge, use the same public
 contract but are not required for alpha.
 
 **Phase 3: Tekton ecosystem integration**
@@ -1603,13 +1601,13 @@ contract but are not required for alpha.
 - Evaluate typed CustomRun results and typed execution references through the
   appropriate Pipeline API process.
 
-Promotion beyond alpha requires at least two independent executor
+Promotion beyond alpha requires at least two independent adapter
 implementations, conformance coverage, cancellation and restart fault tests,
 and one end-to-end Pipeline using an external platform.
 
 ### Test Plan
 
-- **API tests:** defaulting, DNS-qualified executor validation, unique
+- **API tests:** defaulting, DNS-qualified adapter validation, unique
   declarations, immutability, unsupported result types, and Secret-safe
   serialization.
 - **Framework unit tests:** selector projection, claim races, status ownership,
@@ -1621,24 +1619,24 @@ and one end-to-end Pipeline using an external platform.
 - **Pipeline end-to-end tests:** params, workspaces, result substitution,
   `when`, retry, timeout, cancellation, finally tasks, and PipelineRun pruning.
 - **Conformance tests:** all scenarios listed in the Conformance section,
-  runnable against in-tree and external executors.
+  runnable against in-tree and external adapters.
 - **Adapter tests:** fake-server contract tests plus supported-platform
   end-to-end tests for Fullsend, Lightspeed, and OpenHands.
 - **Security tests:** duplicate claim, cross-namespace reference denial,
   service-account misuse, status/log URL credential leakage, malicious
   backend messages, oversized results, and Secret redaction.
-- **Provenance tests:** resolved definition digest, executor version, native
+- **Provenance tests:** resolved definition digest, adapter version, native
   identity, artifact digests, and omission of sensitive content.
 - **Scalability tests:** informer filtering, heartbeat write rate, many waiting
   approvals, remote polling backoff, and controller restart with active runs.
 
 Tests assert observable resources and lifecycle behavior, not exact reconcile
-counts or executor helper structure.
+counts or adapter helper structure.
 
 ### Infrastructure Needed
 
 The initial implementation may live as a Tekton extension while the API and
-executor framework mature. Project governance will determine whether it
+adapter framework mature. Project governance will determine whether it
 belongs in `tektoncd/pipeline` or a separate Tekton repository.
 
 CI requires:
@@ -1659,14 +1657,14 @@ and agent platforms continue to work.
 A platform can migrate incrementally:
 
 1. keep its native runtime and controller unchanged;
-2. add an executor that creates or calls the native execution;
+2. add an adapter that creates or calls the native execution;
 3. define AgentTasks for reusable Pipeline contracts;
 4. move Pipeline orchestration to CustomRuns; and
 5. adopt common logs, artifacts, resolution, and provenance as those
    integrations become available.
 
 Alpha AgentTask definitions and status profiles may require conversion before
-beta. The effective definition digest and executor selector make version skew
+beta. The effective definition digest and adapter selector make version skew
 visible. No migration may silently reinterpret an in-flight CustomRun.
 
 ### Implementation Pull Requests
