@@ -2,7 +2,7 @@
 status: proposed
 title: AgentTask and Pluggable Agent Execution
 creation-date: '2026-03-20'
-last-updated: '2026-08-31'
+last-updated: '2026-09-02'
 authors:
 - '@waveywaves'
 - '@anithapriyanatarajan'
@@ -44,6 +44,7 @@ authors:
   - [Integration with Tekton Projects](#integration-with-tekton-projects)
     - [Pipelines](#pipelines)
     - [Triggers](#triggers)
+    - [Pipelines as Code](#pipelines-as-code)
     - [Results](#results)
     - [Chains](#chains)
   - [Security and Responsibility Boundaries](#security-and-responsibility-boundaries)
@@ -81,9 +82,11 @@ authors:
   - [Introduce AgentRun](#introduce-agentrun)
   - [Introduce AgentTaskAdapterClass](#introduce-agenttaskadapterclass)
   - [Standardize a Generic Agent Container Protocol](#standardize-a-generic-agent-container-protocol)
+  - [Add Framework-Managed Semantic Validation](#add-framework-managed-semantic-validation)
   - [Standardize an Opaque Implementation Reference](#standardize-an-opaque-implementation-reference)
   - [Use the Resolver Interface for Execution](#use-the-resolver-interface-for-execution)
   - [Depend on kagent or Another Single Runtime](#depend-on-kagent-or-another-single-runtime)
+  - [Use GitHub Agentic Workflows as the Execution Model](#use-github-agentic-workflows-as-the-execution-model)
   - [Add Agent Fields to Pipeline](#add-agent-fields-to-pipeline)
 - [Implementation Plan](#implementation-plan)
   - [Milestones](#milestones)
@@ -203,6 +206,9 @@ than a Tekton-facing contract.
    configuration remains behind the adapter boundary.
 9. Guaranteeing that an agent's semantic answer is correct. Conformance covers
    execution behavior, not model quality.
+10. Defining a portable semantic output validator or feedback-and-revision loop.
+    Native platforms may validate before reporting success, and Pipeline authors
+    may add ordinary downstream validation Tasks.
 
 ### Use Cases
 
@@ -272,7 +278,7 @@ messages or platform-specific configuration into the Tekton API.
 | R14 | The effective `AgentTask` identity, adapter name, adapter version, and native execution reference MUST be available for provenance. | Must |
 | R15 | The framework MUST validate and present the `CustomRun` service account name and workspace bindings to the adapter; the adapter MUST document its mapping or reject an unsupported binding. | Must |
 | R16 | Credentials and Secret values MUST NOT be placed in `AgentTask` params, `CustomRun` results, status messages, logs references, or provenance. | Must |
-| R17 | An adapter MUST document its mapping to native sandbox, approval, tool, model, and agent-loop controls and MUST NOT silently bypass those controls. | Must |
+| R17 | An adapter MUST document its mapping to native sandbox, approval, output-validation, tool, model, and agent-loop controls and MUST NOT silently bypass those controls. | Must |
 | R18 | A retry after native execution starts MUST create a distinct attempt identity and MUST NOT occur merely because reconciliation returned a transient error. | Must |
 | R19 | Adapters MUST be independently installable and MUST receive only the RBAC needed for their backend. | Must |
 | R20 | The project MUST publish an adapter conformance suite and a minimal implementation template. | Must |
@@ -795,6 +801,16 @@ may be performed by a Trigger binding, an ordinary Task, or the selected
 platform. `AgentTask` does not define a GitHub-, GitLab-, alert-, or
 message-specific event schema.
 
+#### Pipelines as Code
+
+[Pipelines as Code][pipelines-as-code] may create a `PipelineRun` containing
+`AgentTask`s in response to a Git event. It retains ownership of event normalization and VCS
+status reporting; AgentTask adds no repository-provider event schema. AgentTask
+definitions use the same cluster promotion or remote-resolution mechanisms as
+other reusable definitions, and Pipelines as Code does not install adapters.
+A Phase 3 end-to-end test should cover Git event to `PipelineRun` to
+`AgentTask` completion.
+
 #### Results
 
 Tekton Results already persists the `CustomRun` lifecycle. It does not collect
@@ -825,6 +841,11 @@ The minimum attested evidence is:
 
 Raw prompts, Secret values, credentials, unrestricted transcripts, and
 sensitive model responses are excluded by default.
+
+This TEP defines the minimum evidence contract, not the internal Chains
+implementation. Changes to Chains watchers, APIs, or attestation formats require
+a follow-up Chains design or TEP during Phase 3 and do not block AgentTask
+alpha.
 
 ### Security and Responsibility Boundaries
 
@@ -901,6 +922,13 @@ type AgentTaskResult struct {
     Description string `json:"description,omitempty"`
 }
 ```
+
+`spec.description` is optional human-readable documentation for users and UIs,
+like a Task description. It is not a prompt, graph, or other executable adapter
+input, and adapters must not derive execution behavior from it. Run-specific
+goals and prompts use declared params or workspaces; platform-native graphs and
+configuration remain behind `adapterRef`. This permits LangGraph-style adapters
+without changing the AgentTask contract.
 
 The API should reuse Tekton parameter and workspace declaration types when
 versioning and dependency boundaries allow it. Alpha result values are
@@ -1145,10 +1173,19 @@ Controller reconciliation retries and agent execution retries are different:
   native policy without becoming a new Tekton attempt.
 
 Because the archived retry status is the authoritative attempt counter, a
-controller restart cannot increment it from memory. Because agents may make
-external changes, the framework never starts a new attempt solely because
-status observation temporarily failed. The adapter explicitly marks whether
-a terminal infrastructure failure is safe to retry.
+controller restart cannot increment it from memory. The retry transition is a
+durable gate: the framework performs a resource-version-checked status update
+and ends that reconciliation without creating the next native execution. A
+later reconciliation may start the next attempt only after observing the
+persisted retry history and derived attempt ID.
+
+If the status update conflicts, fails, or returns an uncertain response, the
+framework re-reads the `CustomRun`. It either observes the committed transition
+or retries the same transition; it never increments an in-memory counter. The
+deterministic attempt idempotency key then prevents duplicate native creation.
+Because agents may make external changes, the framework never starts a new
+attempt solely because status observation temporarily failed. The adapter
+explicitly marks whether a terminal infrastructure failure is safe to retry.
 
 ### Status and Outcome Semantics
 
@@ -1174,6 +1211,22 @@ An agent's domain decision is a result. For example, a security reviewer that
 returns `outcome=reject` has successfully performed its work. It should be
 `Succeeded=True`; a downstream `when` expression decides whether deployment
 continues.
+
+Failure classification follows the failing boundary, not an HTTP status code:
+
+| Observation | Framework behavior |
+|-------------|--------------------|
+| A transient adapter or backend API error, including `429` while observing an active execution | Requeue the same attempt without changing terminal status. |
+| The native execution terminates because a model provider, required tool service, platform, or sandbox is unavailable or rate limited | `InfrastructureFailed`. |
+| The native agent terminates because it could not complete its assigned work while its execution environment remained available | `AgentFailed`. |
+| The agent completes and returns a negative domain decision | `Succeeded=True` with the declared result. |
+
+Retryability is separate from classification. A terminal failure starts a new
+Tekton attempt only when the adapter marks it safe to retry and cleanup is
+confirmed. If the native platform handles a rate limit internally, it remains
+within the current attempt. Conformance tests cover these common mappings;
+an adapter with an opaque backend must document its conservative mapping and
+preserve the native reason in bounded detail.
 
 The alpha status profile stored in `CustomRun.status.extraFields` includes:
 
@@ -1236,6 +1289,11 @@ is versioned independently from native adapter detail.
 
 Declared scalar results are written to `CustomRun.status.results`; undeclared
 results are rejected. Result names follow ordinary Tekton substitution rules.
+The framework validates declared names, types, and bounds before reporting
+success. Semantic output validation remains in the native platform, which may
+withhold success until validation passes, or in an explicit downstream Tekton
+Task. The framework does not keep a native execution alive or inject validation
+feedback through a portable protocol.
 
 The complete agent transcript is not a result. Adapters publish logs through
 one of these paths:
@@ -1520,6 +1578,19 @@ also duplicates ordinary Tasks for simple containers.
 A TaskRun reference adapter provides this onboarding path with existing
 Tekton contracts. Other adapters remain free to use a protocol internally.
 
+### Add Framework-Managed Semantic Validation
+
+An optional validation image or script, common `Validating` states, and a
+feedback-and-revision loop would require portable candidate-output, feedback,
+and resume contracts that the example platforms do not share. It would also
+move part of the native agent loop into the Tekton framework.
+
+Alpha therefore standardizes structural result validation only. A native
+platform may validate outside its agent boundary before its adapter reports
+success, and a Pipeline may run an ordinary validation Task afterward. A
+framework-level semantic validation loop can be proposed later if independent
+adapters demonstrate a common resumable contract.
+
 ### Standardize an Opaque Implementation Reference
 
 An AgentTask containing only `implementationRef` would give Pipeline no
@@ -1550,6 +1621,19 @@ cycle, and users of other systems would need a second abstraction.
 
 Each may instead provide an adapter. The common API does not select a winner
 among agent runtimes.
+
+### Use GitHub Agentic Workflows as the Execution Model
+
+[GitHub Agentic Workflows][gh-aw] compiles Markdown workflows into hardened
+GitHub Actions jobs and provides multiple engines, scoped tokens, sandboxing,
+budgets, telemetry, and gated safe outputs. It is a strong model for
+repository automation and defense in depth.
+
+AgentTask instead defines a Kubernetes- and Tekton-native lifecycle contract
+that is independent of GitHub events, Actions, and one workflow format. The
+designs are complementary: an adapter could dispatch and observe a
+`gh-aw`-compiled GitHub Actions workflow, while the AgentTask API does not
+depend on GitHub Actions.
 
 ### Add Agent Fields to Pipeline
 
@@ -1597,7 +1681,9 @@ contract but are not required for alpha.
 - Extend Tekton Results to associate CustomRun log, artifact, and trace
   references with stored lifecycle records.
 - Extend Tekton Chains to attest AgentTask CustomRuns or define equivalent
-  PipelineRun child evidence.
+  PipelineRun child evidence through the approved follow-up design.
+- Validate a Pipelines as Code Git event through `PipelineRun` and `AgentTask`
+  completion without adding an AgentTask-specific event schema.
 - Evaluate typed CustomRun results and typed execution references through the
   appropriate Pipeline API process.
 
@@ -1611,13 +1697,14 @@ and one end-to-end Pipeline using an external platform.
   declarations, immutability, unsupported result types, and Secret-safe
   serialization.
 - **Framework unit tests:** selector projection, claim races, status ownership,
-  reason mapping, truncation, timeout calculation, finalizer behavior, and
-  typed error handling.
+  failure-class mapping, truncation, timeout calculation, durable retry
+  transition, finalizer behavior, and typed error handling.
 - **Controller integration tests:** restart and adoption, lost create response,
-  stale heartbeat, cancellation races, cleanup deadline, safe retry, and
-  owner/correlation metadata.
+  lost retry-status response, stale heartbeat, cancellation races, cleanup
+  deadline, safe retry, and owner/correlation metadata.
 - **Pipeline end-to-end tests:** params, workspaces, result substitution,
-  `when`, retry, timeout, cancellation, finally tasks, and PipelineRun pruning.
+  `when`, retry, timeout, cancellation, finally tasks, PipelineRun pruning,
+  and a Pipelines as Code Git-triggered path.
 - **Conformance tests:** all scenarios listed in the Conformance section,
   runnable against in-tree and external adapters.
 - **Adapter tests:** fake-server contract tests plus supported-platform
@@ -1683,6 +1770,7 @@ To be populated with merged implementation pull requests.
 - [Tekton Results watcher][results-watcher]
 - [Tekton Results logging support][results-logging]
 - [Tekton Chains][chains]
+- [Pipelines as Code][pipelines-as-code]
 - [Fullsend][fullsend]
 - [Fullsend architecture][fullsend-architecture]
 - [OpenShift Lightspeed Agentic Operator][lightspeed]
@@ -1690,6 +1778,7 @@ To be populated with merged implementation pull requests.
 - [OpenHands software-agent-sdk and Agent Server][openhands]
 - [OpenHands Agent Server API][openhands-server]
 - [Agent2Agent Protocol][a2a]
+- [GitHub Agentic Workflows][gh-aw]
 - [Tekton Design Principles][design-principles]
 
 [tep-0002]: https://github.com/tektoncd/community/blob/main/teps/0002-custom-tasks.md
@@ -1703,6 +1792,7 @@ To be populated with merged implementation pull requests.
 [results-watcher]: https://github.com/tektoncd/results/blob/main/docs/watcher/README.md
 [results-logging]: https://github.com/tektoncd/results/blob/main/docs/logging-support.md
 [chains]: https://github.com/tektoncd/chains
+[pipelines-as-code]: https://github.com/tektoncd/pipelines-as-code
 [fullsend]: https://github.com/fullsend-ai/fullsend
 [fullsend-architecture]: https://github.com/fullsend-ai/fullsend/blob/main/docs/architecture.md
 [lightspeed]: https://github.com/openshift/lightspeed-agentic-operator
@@ -1710,4 +1800,5 @@ To be populated with merged implementation pull requests.
 [openhands]: https://github.com/OpenHands/software-agent-sdk
 [openhands-server]: https://github.com/OpenHands/software-agent-sdk/tree/main/openhands-agent-server
 [a2a]: https://a2a-protocol.org/latest/
+[gh-aw]: https://github.github.com/gh-aw/
 [design-principles]: https://github.com/tektoncd/community/blob/main/design-principles.md
